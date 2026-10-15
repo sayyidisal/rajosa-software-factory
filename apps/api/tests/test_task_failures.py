@@ -10,7 +10,13 @@ from app.workspaces.local import LocalWorkspace
 
 
 class RejectingGate:
-    def evaluate(self, result: AgentResult, workspace: Path) -> QualityReport:
+    def evaluate(
+        self,
+        result: AgentResult,
+        workspace: Path,
+        *,
+        profile: str = "generic_text",
+    ) -> QualityReport:
         return QualityReport(
             passed=False,
             checks=[
@@ -50,7 +56,7 @@ def test_rejecting_gate_marks_task_failed(workspace_root: Path) -> None:
     body = response.json()
     assert body["status"] == "failed"
     assert body["quality"]["passed"] is False
-    assert body["error"] is None
+    assert body["error"] == "Validation failed: rejected by test gate"
     assert body["output"]
 
     fetched = client.get(f"/tasks/{body['id']}")

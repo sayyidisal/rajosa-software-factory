@@ -34,14 +34,18 @@ def test_invalid_payload_returns_422(client: TestClient) -> None:
 
 def test_basic_quality_gate_rejects_empty_output(tmp_path: Path) -> None:
     gate = BasicQualityGate()
-    report = gate.evaluate(AgentResult(output=""), tmp_path)
+    report = gate.evaluate(AgentResult(output=""), tmp_path, profile="generic_text")
     assert report.passed is False
     assert any(not check.passed for check in report.checks)
 
 
 def test_basic_quality_gate_rejects_missing_artifact(tmp_path: Path) -> None:
     gate = BasicQualityGate()
-    report = gate.evaluate(AgentResult(output="present"), tmp_path)
+    report = gate.evaluate(
+        AgentResult(output="present"),
+        tmp_path,
+        profile="generic_text",
+    )
     assert report.passed is False
     missing = next(check for check in report.checks if check.name == "artifact_present")
     assert missing.passed is False

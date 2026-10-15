@@ -1,0 +1,3 @@
+# Vendor is generated locally from the API venv — do not commit package trees.
+*
+!.gitignore

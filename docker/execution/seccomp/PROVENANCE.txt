@@ -1,0 +1,10 @@
+source_repo=https://github.com/moby/profiles
+source_tag=seccomp/v0.2.1
+source_commit=5ad5f40ecde90d78e4a7c861c003fe92747d5518
+source_path=seccomp/default.json
+source_url=https://raw.githubusercontent.com/moby/profiles/refs/tags/seccomp/v0.2.1/seccomp/default.json
+source_url_commit_mirror=https://raw.githubusercontent.com/moby/profiles/5ad5f40ecde90d78e4a7c861c003fe92747d5518/seccomp/default.json
+sha256=536529b665dd0972c37bfb569f5d4ac8a53592e7b00752bc39ff063ca9864c74
+bytes=13470
+fetched_for=Docker Engine 28.1.1 / Docker Desktop (daemon previously seccomp=unconfined)
+note=moby/profiles repo did not exist at Engine 28.1.1 release (2025-04-18); in-tree Engine profile is moby/moby@v28.1.1 profiles/seccomp/default.json (different blob). Tag seccomp/v0.2.1 is the Docker-documented pin for explicit --security-opt seccomp=<file> (Engine 29 docs); first post-split tagged default suitable for allowlist enforcement without using moving main.

@@ -1,0 +1,5 @@
+# Only vendored packages may enter the build context payload.
+# Dockerfile itself is sent separately via -f; do not COPY anything else.
+*
+!vendor/
+!vendor/**

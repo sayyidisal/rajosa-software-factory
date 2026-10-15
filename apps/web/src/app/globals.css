@@ -62,7 +62,8 @@ main {
 }
 
 .task-form input,
-.task-form textarea {
+.task-form textarea,
+.task-form select {
   width: 100%;
   padding: 0.7rem 0.8rem;
   border: 1px solid #334155;

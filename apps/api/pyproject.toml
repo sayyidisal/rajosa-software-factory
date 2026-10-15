@@ -11,6 +11,7 @@ dependencies = [
   "fastapi==0.143.1",
   "uvicorn==0.54.0",
   "pydantic==2.14.1",
+  "openai==2.11.0",
 ]
 
 [project.optional-dependencies]
