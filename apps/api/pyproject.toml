@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rajosa-api"
+version = "0.1.0"
+description = "Rajosa AI Software Factory API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.143.1",
+  "uvicorn==0.54.0",
+  "pydantic==2.14.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
