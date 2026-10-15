@@ -1,6 +1,6 @@
-# Arsitektur fase quality gate + eksekusi lokal opsional
+# Arsitektur fase quality gate + orkestrasi + eksekusi lokal opsional
 
-Aplikasi web Next.js meneruskan request same-origin di `/backend/*` ke FastAPI. FastAPI membuat direktori workspace, menjalankan agent adapter, lalu menilai hasil dengan `BasicQualityGate` menurut `validation_profile`.
+Aplikasi web Next.js meneruskan request same-origin di `/backend/*` ke FastAPI. FastAPI memakai **OrchestratorService** deterministik: buat task → peran planner → rencana tervalidasi → **persetujuan rencana eksplisit** → peran implementer → `BasicQualityGate` menurut `validation_profile` → (opsional) otorisasi eksekusi terpisah.
 
 ## Adapter
 
@@ -25,15 +25,23 @@ Field opsional `validation_profile` pada `POST /tasks` (default `generic_text`):
 | `product_catalog_json` | JSON standar ketat + skema katalog; field ekstra diizinkan; NaN/Infinity/duplikat key ditolak |
 | `python_unit_tests` | AST pytest-lite: `test_*` modul + `Test*.test_*`; **statis saja**; tanpa eksekusi/`tests_passed` |
 | `python_code` | Artefak + struktur `def`/`class` via AST (statis) |
-| `python_test_execution` | Validasi statis sama seperti `python_unit_tests` pada create; runtime hanya via `POST /tasks/{id}/execute-tests` |
+| `python_test_execution` | Setelah approval: validasi statis seperti `python_unit_tests`; `lifecycle=awaiting_execution_auth`; runtime hanya via `POST /tasks/{id}/execute-tests` |
 
-Profil tidak dikenal ditolak dengan HTTP 422. Tidak ada inference semantik dari teks instruksi bebas. Memilih profil **tidak** mengotorisasi eksekusi kode.
+Profil tidak dikenal ditolak dengan HTTP 422. Tidak ada inference semantik dari teks instruksi bebas. Memilih profil **tidak** mengotorisasi eksekusi kode. Persetujuan rencana **tidak** mengotorisasi eksekusi kode.
 
-## Task dan quality gate
+## Task, lifecycle, dan quality gate
 
-Task disimpan di memori proses. Restart backend menghapus seluruh task.
+Task disimpan di memori proses. Restart backend menghapus seluruh task dan event orkestrasi.
 
-`status` bernilai `passed` hanya jika quality gate juga lulus. HTTP 200 dari provider tidak berarti output task benar. Kegagalan validator deterministik menandai task `failed` meskipun artefak berhasil ditulis.
+Field:
+
+- `lifecycle` — tahap aktual (`created` … `awaiting_plan_approval` … `completed` / `failed`).
+- `status` — kompatibilitas: `pending` | `passed` | `failed` (`passed` hanya jika `lifecycle=completed`).
+- `execution` — bukti runner terpisah (fail-closed).
+
+`POST /tasks` **tidak** menjalankan implementasi; task masuk `awaiting_plan_approval` dengan `plan` tervalidasi. Implementasi dimulai hanya setelah `POST /tasks/{id}/approve-plan` dengan `{"approved": true}`.
+
+HTTP 200 dari provider tidak berarti output task benar. Kegagalan validator deterministik menandai task `failed` meskipun artefak berhasil ditulis.
 
 Quality gate membedakan:
 1. Agent selesai dieksekusi.
@@ -41,7 +49,7 @@ Quality gate membedakan:
 3. Output lolos validator profil.
 4. Task lulus gate.
 
-Pemeriksaan `test_structure_valid` / `code_structure_valid` bersifat statis. Field terpisah `execution` membawa bukti runner (jika ada). Generated code **tidak** dijalankan pada `POST /tasks`.
+Pemeriksaan `test_structure_valid` / `code_structure_valid` bersifat statis. Field terpisah `execution` membawa bukti runner (jika ada). Generated code **tidak** dijalankan pada `POST /tasks` maupun pada approve-plan.
 
 Workspace menahan path di dalam root yang ditentukan. Ini adalah path containment, bukan isolasi eksekusi yang aman untuk arbitrary code.
 
@@ -64,6 +72,10 @@ API default mendengarkan `127.0.0.1`. Frontend development diikat ke localhost. 
 
 API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang sesuai.
 
+## Orkestrasi agen (Phase 4B)
+
+Orchestrator deterministik + approval rencana wajib: [agent-orchestration-design.md](./agent-orchestration-design.md).
+
 ## Keputusan yang ditunda
 
-Multi-agent, autentikasi, persistensi, worker asinkron, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
+SQLite/persistensi durable (4E), retry terbatas (4F), reviewer agent (4D), autentikasi, worker asinkron, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.

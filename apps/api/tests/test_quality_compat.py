@@ -185,7 +185,23 @@ class ExplodingGate:
 
 
 class FixedAdapter:
-    def run(self, *, task_id, title, instruction, workspace: WorkspaceWriter):
+    def run(
+        self,
+        *,
+        task_id,
+        title,
+        instruction,
+        workspace: WorkspaceWriter,
+        role: str = "implementer",
+    ):
+        import json
+
+        from tests.orchestration_helpers import DEFAULT_PLAN
+
+        if role == "planner":
+            content = json.dumps(DEFAULT_PLAN)
+            workspace.write_text(task_id, "plan.json", content)
+            return AgentResult(output=content, artifact_name="plan.json")
         workspace.write_text(task_id, "result.txt", "ok")
         return AgentResult(output="ok")
 
@@ -201,8 +217,12 @@ def test_exception_logs_context_without_secrets(
         store=MemoryTaskStore(),
     )
     client = TestClient(app)
+    created = client.post("/tasks", json={"title": "T", "instruction": "I"}).json()
     with caplog.at_level(logging.ERROR):
-        body = client.post("/tasks", json={"title": "T", "instruction": "I"}).json()
+        body = client.post(
+            f"/tasks/{created['id']}/approve-plan",
+            json={"approved": True},
+        ).json()
     assert body["status"] == "failed"
     assert "sk-leak" not in body.get("error", "")
     assert "/tmp/hidden" not in body.get("error", "")

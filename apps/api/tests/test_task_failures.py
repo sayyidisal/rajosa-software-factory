@@ -34,7 +34,15 @@ class ExplodingAdapter:
         self.calls = 0
         self.secret = "SECRET_VALUE_DO_NOT_LEAK_abc123"
 
-    def run(self, *, task_id: str, title: str, instruction: str, workspace) -> AgentResult:
+    def run(
+        self,
+        *,
+        task_id: str,
+        title: str,
+        instruction: str,
+        workspace,
+        role: str = "implementer",
+    ) -> AgentResult:
         self.calls += 1
         raise RuntimeError(f"boom with {self.secret}")
 
@@ -48,13 +56,21 @@ def test_rejecting_gate_marks_task_failed(workspace_root: Path) -> None:
     )
     client = TestClient(app)
 
-    response = client.post(
+    created = client.post(
         "/tasks",
         json={"title": "Gate Fail", "instruction": "Should fail quality"},
+    )
+    assert created.status_code == 200
+    assert created.json()["lifecycle"] == "awaiting_plan_approval"
+
+    response = client.post(
+        f"/tasks/{created.json()['id']}/approve-plan",
+        json={"approved": True},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "failed"
+    assert body["lifecycle"] == "failed"
     assert body["quality"]["passed"] is False
     assert body["error"] == "Validation failed: rejected by test gate"
     assert body["output"]
@@ -83,6 +99,7 @@ def test_adapter_exception_marks_task_failed_safely(workspace_root: Path) -> Non
     body = response.json()
     assert adapter.calls == 1
     assert body["status"] == "failed"
+    assert body["lifecycle"] == "failed"
     assert body["quality"]["passed"] is False
     assert body["output"] == ""
     assert body["error"] == "The agent could not complete this task."

@@ -1,14 +1,18 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from app.domain.models import Task, TaskCreate
+from app.domain.models import PlanDecisionBody, Task, TaskCreate
 from app.execution.models import ExecuteTestsBody
+from app.orchestration.service import OrchestrationConflict
 
 router = APIRouter()
 
 
 @router.post("/tasks", response_model=Task)
 def create_task(payload: TaskCreate, request: Request) -> Task:
-    """Create and statically validate a task. Never starts isolated execution."""
+    """Create a task, generate a validated plan, and wait for plan approval.
+
+    Never starts isolated execution. Never starts implementation without approval.
+    """
     service = request.app.state.task_service
     return service.create_task(
         title=payload.title,
@@ -26,6 +30,32 @@ def get_task(task_id: str, request: Request) -> Task:
     return task
 
 
+@router.post("/tasks/{task_id}/approve-plan", response_model=Task)
+def approve_plan(
+    task_id: str,
+    payload: PlanDecisionBody,
+    request: Request,
+) -> Task:
+    """Explicit plan approval or rejection.
+
+    Requires ``approved`` boolean. ``true`` starts implementation at most once.
+    ``false`` rejects the plan without generating artifacts or executing code.
+    """
+    orchestrator = request.app.state.orchestrator
+    try:
+        if payload.approved is True:
+            return orchestrator.approve_plan(task_id, approved=True)
+        if payload.approved is False:
+            return orchestrator.reject_plan(task_id)
+        raise ValueError("explicit plan approval decision is required")
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Task not found") from None
+    except OrchestrationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
 @router.post("/tasks/{task_id}/execute-tests", response_model=Task)
 def execute_tests(
     task_id: str,
@@ -35,6 +65,7 @@ def execute_tests(
     """Explicitly request isolated Python test execution for an existing task.
 
     Selecting validation_profile alone does not authorize execution.
+    Plan approval alone does not authorize execution.
     Model-generated text cannot authorize execution.
     Requires confirm=true in the request body.
     """

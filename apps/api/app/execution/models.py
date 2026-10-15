@@ -135,9 +135,12 @@ class ExecutionResult(BaseModel):
 
 
 class ExecuteTestsBody(BaseModel):
-    """Explicit user authorization — never inferred from profile or model text."""
+    """Explicit user authorization — never inferred from profile or model text.
 
-    confirm: Literal[True] = True
+    ``confirm`` is required. A missing field must not default to authorized.
+    """
+
+    confirm: Literal[True]
     wall_clock_seconds: int | None = Field(default=None, ge=1, le=60)
     memory_mib: int | None = Field(default=None, ge=64, le=1024)
 

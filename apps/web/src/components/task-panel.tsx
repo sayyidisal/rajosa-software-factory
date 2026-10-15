@@ -4,9 +4,12 @@ import { FormEvent, useEffect, useState } from "react";
 
 import {
   ApiUnavailableError,
+  ConflictError,
   ValidationError,
+  approvePlan,
   createTask,
   describeExecution,
+  describeLifecycle,
   executeTaskTests,
   fetchHealth,
   isTaskSuccess,
@@ -17,10 +20,25 @@ import {
 type PanelState =
   | { kind: "idle" }
   | { kind: "loading" }
+  | { kind: "awaiting_plan"; task: Task }
+  | { kind: "awaiting_execution"; task: Task }
   | { kind: "success"; task: Task }
   | { kind: "failed"; task: Task }
   | { kind: "api_unavailable"; message: string }
   | { kind: "validation"; message: string };
+
+function panelFromTask(task: Task): PanelState {
+  if (task.lifecycle === "awaiting_plan_approval") {
+    return { kind: "awaiting_plan", task };
+  }
+  if (task.lifecycle === "awaiting_execution_auth") {
+    return { kind: "awaiting_execution", task };
+  }
+  if (isTaskSuccess(task)) {
+    return { kind: "success", task };
+  }
+  return { kind: "failed", task };
+}
 
 export function TaskPanel() {
   const [title, setTitle] = useState("");
@@ -29,6 +47,7 @@ export function TaskPanel() {
     useState<ValidationProfile>("generic_text");
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [panel, setPanel] = useState<PanelState>({ kind: "idle" });
+  const [approving, setApproving] = useState(false);
   const [executing, setExecuting] = useState(false);
 
   useEffect(() => {
@@ -59,11 +78,7 @@ export function TaskPanel() {
         instruction,
         validation_profile: validationProfile,
       });
-      if (isTaskSuccess(task)) {
-        setPanel({ kind: "success", task });
-      } else {
-        setPanel({ kind: "failed", task });
-      }
+      setPanel(panelFromTask(task));
       setApiHealthy(true);
     } catch (error) {
       if (error instanceof ValidationError) {
@@ -81,18 +96,38 @@ export function TaskPanel() {
     }
   }
 
+  async function onDecidePlan(task: Task, approved: boolean) {
+    setApproving(true);
+    try {
+      const updated = await approvePlan(task.id, approved);
+      setPanel(panelFromTask(updated));
+      setApiHealthy(true);
+    } catch (error) {
+      if (error instanceof ValidationError || error instanceof ConflictError) {
+        setPanel({ kind: "validation", message: error.message });
+        return;
+      }
+      setApiHealthy(false);
+      setPanel({
+        kind: "api_unavailable",
+        message:
+          error instanceof ApiUnavailableError
+            ? error.message
+            : "API tidak tersedia",
+      });
+    } finally {
+      setApproving(false);
+    }
+  }
+
   async function onExecuteTests(task: Task) {
     setExecuting(true);
     try {
       const updated = await executeTaskTests(task.id);
-      if (isTaskSuccess(updated)) {
-        setPanel({ kind: "success", task: updated });
-      } else {
-        setPanel({ kind: "failed", task: updated });
-      }
+      setPanel(panelFromTask(updated));
       setApiHealthy(true);
     } catch (error) {
-      if (error instanceof ValidationError) {
+      if (error instanceof ValidationError || error instanceof ConflictError) {
         setPanel({ kind: "validation", message: error.message });
         return;
       }
@@ -109,7 +144,91 @@ export function TaskPanel() {
     }
   }
 
+  function renderPlan(task: Task) {
+    const plan = task.plan;
+    if (!plan) {
+      return null;
+    }
+    return (
+      <div className="plan-block">
+        <p>
+          <span className="muted">Rencana:</span> {plan.summary}
+        </p>
+        <p>
+          <span className="muted">Memerlukan eksekusi runtime:</span>{" "}
+          {plan.requires_execution ? "ya" : "tidak"}
+        </p>
+        <p className="muted">Goals</p>
+        <ul>
+          {plan.goals.map((goal) => (
+            <li key={goal}>{goal}</li>
+          ))}
+        </ul>
+        <p className="muted">Steps</p>
+        <ol>
+          {plan.steps.map((step) => (
+            <li key={step.step_id}>
+              <strong>{step.step_id}</strong>: {step.description}
+              {step.acceptance_checks.length ? (
+                <ul>
+                  {step.acceptance_checks.map((check) => (
+                    <li key={check}>{check}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+        {plan.acceptance_checks.length ? (
+          <>
+            <p className="muted">Acceptance checks</p>
+            <ul>
+              {plan.acceptance_checks.map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderMeta(task: Task) {
+    return (
+      <>
+        <p>
+          <span className="muted">ID:</span> {task.id}
+        </p>
+        <p>
+          <span className="muted">Lifecycle:</span> {task.lifecycle} —{" "}
+          {describeLifecycle(task)}
+        </p>
+        <p>
+          <span className="muted">Status (legacy):</span> {task.status}
+        </p>
+      </>
+    );
+  }
+
+  function renderQuality(task: Task) {
+    if (!task.quality.checks.length) {
+      return null;
+    }
+    return (
+      <ul>
+        {task.quality.checks.map((check) => (
+          <li key={check.name}>
+            {check.name}: {check.detail}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
   function renderExecution(task: Task) {
+    const canExecute =
+      task.lifecycle === "awaiting_execution_auth" &&
+      task.validation_profile === "python_test_execution";
     return (
       <div className="execution-block">
         <p>
@@ -127,11 +246,10 @@ export function TaskPanel() {
             ) : null}
           </ul>
         ) : null}
-        {task.validation_profile === "python_test_execution" &&
-        task.status === "passed" ? (
+        {canExecute ? (
           <button
             type="button"
-            disabled={executing || panel.kind === "loading"}
+            disabled={executing || approving || panel.kind === "loading"}
             onClick={() => onExecuteTests(task)}
           >
             {executing ? "Menjalankan tes..." : "Jalankan tes terisolasi"}
@@ -141,13 +259,16 @@ export function TaskPanel() {
     );
   }
 
+  const busy = panel.kind === "loading" || approving || executing;
+
   return (
     <section className="panel">
       <header className="panel-header">
         <h1>Rajosa AI Software Factory</h1>
         <p className="muted">
-          Proof of concept: kirim satu task ke adapter tiruan dan quality gate.
-          Eksekusi kode hanya lewat aksi eksplisit, default dinonaktifkan.
+          Proof of concept: buat task → tinjau rencana → setujui eksplisit →
+          validasi deterministik. Eksekusi kode hanya lewat aksi terpisah,
+          default dinonaktifkan.
         </p>
         <p className="status-line">
           Status API:{" "}
@@ -167,7 +288,7 @@ export function TaskPanel() {
             onChange={(event) => setTitle(event.target.value)}
             maxLength={120}
             required
-            disabled={panel.kind === "loading"}
+            disabled={busy}
           />
         </label>
         <label>
@@ -178,7 +299,7 @@ export function TaskPanel() {
             maxLength={4000}
             rows={6}
             required
-            disabled={panel.kind === "loading"}
+            disabled={busy}
           />
         </label>
         <label>
@@ -188,7 +309,7 @@ export function TaskPanel() {
             onChange={(event) =>
               setValidationProfile(event.target.value as ValidationProfile)
             }
-            disabled={panel.kind === "loading"}
+            disabled={busy}
           >
             <option value="generic_text">generic_text</option>
             <option value="product_catalog_json">product_catalog_json</option>
@@ -197,8 +318,8 @@ export function TaskPanel() {
             <option value="python_test_execution">python_test_execution</option>
           </select>
         </label>
-        <button type="submit" disabled={panel.kind === "loading"}>
-          Jalankan task
+        <button type="submit" disabled={busy}>
+          Buat task &amp; rencana
         </button>
       </form>
 
@@ -206,25 +327,61 @@ export function TaskPanel() {
         {panel.kind === "loading" && (
           <div className="banner loading">
             <strong>Memproses</strong>
-            <p>Task sedang dijalankan.</p>
+            <p>Rencana sedang dibuat.</p>
+          </div>
+        )}
+
+        {panel.kind === "awaiting_plan" && (
+          <div className="banner awaiting">
+            <strong>Menunggu persetujuan rencana</strong>
+            <p>
+              Implementasi belum dimulai. Setujui atau tolak rencana secara
+              eksplisit.
+            </p>
+            {renderMeta(panel.task)}
+            {renderPlan(panel.task)}
+            <div className="plan-actions">
+              <button
+                type="button"
+                disabled={approving}
+                onClick={() => onDecidePlan(panel.task, true)}
+              >
+                {approving ? "Memproses..." : "Setujui rencana"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={approving}
+                onClick={() => onDecidePlan(panel.task, false)}
+              >
+                Tolak rencana
+              </button>
+            </div>
+          </div>
+        )}
+
+        {panel.kind === "awaiting_execution" && (
+          <div className="banner awaiting">
+            <strong>Menunggu otorisasi eksekusi</strong>
+            <p>
+              Validasi statis lulus. Runtime belum dijalankan — otorisasi
+              eksekusi terpisah dari persetujuan rencana.
+            </p>
+            {renderMeta(panel.task)}
+            {renderPlan(panel.task)}
+            {panel.task.output ? <pre>{panel.task.output}</pre> : null}
+            {renderQuality(panel.task)}
+            {renderExecution(panel.task)}
           </div>
         )}
 
         {panel.kind === "success" && (
           <div className="banner success">
             <strong>Berhasil</strong>
-            <p>Task lolos quality gate (validasi statis).</p>
-            <p>
-              <span className="muted">ID:</span> {panel.task.id}
-            </p>
+            <p>Task mencapai lifecycle completed.</p>
+            {renderMeta(panel.task)}
             <pre>{panel.task.output}</pre>
-            <ul>
-              {panel.task.quality.checks.map((check) => (
-                <li key={check.name}>
-                  {check.name}: {check.detail}
-                </li>
-              ))}
-            </ul>
+            {renderQuality(panel.task)}
             {renderExecution(panel.task)}
           </div>
         )}
@@ -238,14 +395,10 @@ export function TaskPanel() {
                   ?.detail ??
                 "Task gagal."}
             </p>
+            {renderMeta(panel.task)}
+            {panel.task.plan ? renderPlan(panel.task) : null}
             {panel.task.output ? <pre>{panel.task.output}</pre> : null}
-            <ul>
-              {panel.task.quality.checks.map((check) => (
-                <li key={check.name}>
-                  {check.name}: {check.detail}
-                </li>
-              ))}
-            </ul>
+            {renderQuality(panel.task)}
             {renderExecution(panel.task)}
           </div>
         )}
@@ -259,7 +412,7 @@ export function TaskPanel() {
 
         {panel.kind === "validation" && (
           <div className="banner validation">
-            <strong>Input tidak valid</strong>
+            <strong>Permintaan tidak valid</strong>
             <p>{panel.message}</p>
           </div>
         )}

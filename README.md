@@ -1,6 +1,6 @@
 # Rajosa AI Software Factory
 
-Fondasi lokal untuk menjalankan satu task melalui agent adapter, workspace dengan penahanan path, dan quality gate. Mendukung mock adapter, adapter SumoPod, dan (opsional, default off) runner tes Python terisolasi lokal. Belum production-ready; isolasi kontainer bukan jaminan keamanan lengkap.
+Fondasi lokal untuk menjalankan satu task melalui orchestrator deterministik (rencana → persetujuan eksplisit → implementasi → quality gate), workspace dengan penahanan path, dan (opsional, default off) runner tes Python terisolasi lokal. Mendukung mock adapter dan SumoPod. Belum production-ready; isolasi kontainer bukan jaminan keamanan lengkap.
 
 ## Prasyarat
 
@@ -70,9 +70,19 @@ Jika `AGENT_ADAPTER=sumopod` tetapi `SUMOPOD_API_KEY` kosong, aplikasi tetap sta
 | `product_catalog_json` | Ya | JSON standar murni (tolak NaN/Infinity/duplikat key/fence); `products` tepat 3 item; id/name/price/in_stock. Field ekstra pada objek **diizinkan**. |
 | `python_unit_tests` | Statis (AST) | Pytest-compatible discovery. **Tidak mengeksekusi tes.** Tidak ada `tests_passed`. |
 | `python_code` | Statis (AST) | Syntax + `def`/`class`; **tidak dijalankan.** |
-| `python_test_execution` | Statis pada create | Sama seperti unit tests pada create; runtime hanya setelah aksi eksplisit `execute-tests`. |
+| `python_test_execution` | Statis setelah approval | Setelah approval: menunggu `awaiting_execution_auth`; runtime hanya setelah `execute-tests`. |
 
 Profil tidak dikenal ditolak (HTTP 422). Profil tidak diinfer dari teks instruksi. Memilih profil **tidak** menjalankan kode.
+
+## Alur orkestrasi (Phase 4B)
+
+1. `POST /tasks` → `lifecycle=awaiting_plan_approval` + `plan` tervalidasi (belum implementasi).
+2. `POST /tasks/{id}/approve-plan` dengan `{"approved":true}` → implementasi + quality gate.
+3. Profil statis → `lifecycle=completed` / `status=passed` jika gate lulus.
+4. `python_test_execution` → `lifecycle=awaiting_execution_auth` hingga eksekusi eksplisit.
+5. `{"approved":false}` menolak rencana tanpa implementasi.
+
+Lihat [docs/agent-orchestration-design.md](./docs/agent-orchestration-design.md).
 
 ## Isolated Python test execution (default: off)
 
@@ -80,8 +90,9 @@ Lihat [docs/execution-controls.md](./docs/execution-controls.md) untuk inspeksi 
 
 Alur:
 
-1. Buat task dengan `validation_profile=python_test_execution` (validasi statis saja).
-2. Minta eksekusi eksplisit:
+1. Buat task dengan `validation_profile=python_test_execution`.
+2. Setujui rencana (`approve-plan`).
+3. Setelah `awaiting_execution_auth`, minta eksekusi eksplisit:
 
 ```bash
 curl -s http://127.0.0.1:8000/tasks/<task-id>/execute-tests \
@@ -89,7 +100,7 @@ curl -s http://127.0.0.1:8000/tasks/<task-id>/execute-tests \
   -d '{"confirm":true}'
 ```
 
-Atau tombol **Jalankan tes terisolasi** di UI setelah task lulus gate.
+Atau tombol **Jalankan tes terisolasi** di UI saat lifecycle menunggu otorisasi eksekusi. Persetujuan rencana **tidak** menjalankan runner.
 
 Default:
 

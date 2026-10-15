@@ -1,6 +1,8 @@
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.domain.models import AgentResult
+
+AgentRole = Literal["planner", "implementer"]
 
 
 class WorkspaceWriter(Protocol):
@@ -16,5 +18,6 @@ class AgentAdapter(Protocol):
         title: str,
         instruction: str,
         workspace: WorkspaceWriter,
+        role: AgentRole = "implementer",
     ) -> AgentResult:
-        """Execute one task and return its result."""
+        """Execute one agent role and return its result."""

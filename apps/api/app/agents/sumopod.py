@@ -12,7 +12,7 @@ from openai import (
     RateLimitError,
 )
 
-from app.agents.base import WorkspaceWriter
+from app.agents.base import AgentRole, WorkspaceWriter
 from app.agents.errors import AgentError
 from app.config import Settings
 from app.domain.models import AgentResult
@@ -40,6 +40,25 @@ def _default_client_factory(settings: Settings) -> OpenAI:
     )
 
 
+def _system_prompt_for_role(role: AgentRole) -> str:
+    if role == "planner":
+        return (
+            "You are a planning assistant. Return ONLY a JSON object matching this schema: "
+            '{"schema_version":"1","summary":"...","goals":["..."],'
+            '"steps":[{"step_id":"...","description":"...","expected_artifacts":["result.txt"],'
+            '"acceptance_checks":["..."]}],"acceptance_checks":["..."],'
+            '"requires_execution":false}. '
+            "Do not include shell commands, Docker options, environment variables, "
+            "or execution authorization fields. "
+            "Do not claim that you executed code or approved the plan."
+        )
+    return (
+        "You are a software engineering assistant. "
+        "Return clear text for the task. "
+        "Do not claim that you executed code or modified files."
+    )
+
+
 class SumoPodAgentAdapter:
     def __init__(
         self,
@@ -57,6 +76,7 @@ class SumoPodAgentAdapter:
         title: str,
         instruction: str,
         workspace: WorkspaceWriter,
+        role: AgentRole = "implementer",
     ) -> AgentResult:
         api_key = (self._settings.sumopod_api_key or "").strip()
         if not api_key:
@@ -65,6 +85,7 @@ class SumoPodAgentAdapter:
         title = title[:120]
         instruction = instruction[:4000]
         client = self._client_factory(self._settings)
+        system_content = _system_prompt_for_role(role)
 
         try:
             response = client.chat.completions.create(
@@ -72,11 +93,7 @@ class SumoPodAgentAdapter:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are a software engineering assistant. "
-                            "Return clear text for the task. "
-                            "Do not claim that you executed code or modified files."
-                        ),
+                        "content": system_content,
                     },
                     {
                         "role": "user",
@@ -123,8 +140,9 @@ class SumoPodAgentAdapter:
         if len(content) > max_chars:
             content = content[:max_chars]
 
-        workspace.write_text(task_id, "result.txt", content)
-        return AgentResult(output=content)
+        artifact = "plan.json" if role == "planner" else "result.txt"
+        workspace.write_text(task_id, artifact, content)
+        return AgentResult(output=content, artifact_name=artifact)
 
     def _extract_text(self, response: Any) -> str:
         try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from app.domain.models import AgentResult, Task
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 EXECUTABLE_PROFILES = frozenset({"python_test_execution"})
 
+LifecycleHook = Callable[[Task], Task]
+
 
 class ExecutionService:
     def __init__(
@@ -44,6 +47,7 @@ class ExecutionService:
         gate: QualityGate,
         gate_lock: ExecutionGate,
         staging_base: Path | None = None,
+        lifecycle_hook: LifecycleHook | None = None,
     ) -> None:
         self.runner = runner
         self.workspace = workspace
@@ -51,6 +55,7 @@ class ExecutionService:
         self.gate = gate
         self.gate_lock = gate_lock
         self.staging_base = staging_base or workspace.root
+        self.lifecycle_hook = lifecycle_hook
 
     def execute_tests(
         self,
@@ -87,6 +92,11 @@ class ExecutionService:
                         "isolated test execution. Use python_test_execution."
                     ),
                 ),
+            )
+
+        if task.lifecycle != "awaiting_execution_auth":
+            raise ValueError(
+                f"execution is not allowed in lifecycle '{task.lifecycle}'"
             )
 
         # Re-validate statically before any execution attempt.
@@ -228,11 +238,9 @@ class ExecutionService:
     def _persist(self, task: Task, result: ExecutionResult) -> Task:
         summary = ExecutionSummary.from_result(result)
         updated = task.model_copy(update={"execution": summary})
-        # Task status stays based on static quality gate; execution is separate evidence.
-        # Never flip task to passed based on execution alone if static failed (already passed).
-        if summary.tests_passed and summary.tests_executed:
-            # Keep task status as-is when static already passed; do not imply
-            # generic success equals tests_passed — execution field carries that.
-            pass
+        # Lifecycle completion for runtime-required profiles is owned by the orchestrator.
+        # Execution evidence remains in the execution field; never invent success here.
+        if self.lifecycle_hook is not None and task.lifecycle == "awaiting_execution_auth":
+            return self.lifecycle_hook(updated)
         self.store.save(updated)
         return updated

@@ -139,3 +139,52 @@ main {
   background: #1e293b;
   border-color: #64748b;
 }
+
+.awaiting {
+  background: #0c1a2e;
+  border-color: #1d4ed8;
+}
+
+.plan-block {
+  margin: 0.75rem 0;
+}
+
+.plan-block ol {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.plan-actions button,
+.execution-block button {
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plan-actions button.secondary {
+  background: transparent;
+  border: 1px solid #64748b;
+  color: #e7ecf3;
+}
+
+.plan-actions button:disabled,
+.execution-block button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.execution-block {
+  margin-top: 0.75rem;
+}

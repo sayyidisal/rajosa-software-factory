@@ -253,12 +253,29 @@ class FixedAdapter:
     def __init__(self, content: str) -> None:
         self.content = content
 
-    def run(self, *, task_id, title, instruction, workspace: WorkspaceWriter):
+    def run(
+        self,
+        *,
+        task_id,
+        title,
+        instruction,
+        workspace: WorkspaceWriter,
+        role: str = "implementer",
+    ):
+        from tests.orchestration_helpers import DEFAULT_PLAN
+        import json
+
+        if role == "planner":
+            content = json.dumps(DEFAULT_PLAN)
+            workspace.write_text(task_id, "plan.json", content)
+            return AgentResult(output=content, artifact_name="plan.json")
         workspace.write_text(task_id, "result.txt", self.content)
         return AgentResult(output=self.content)
 
 
 def test_validator_exception_does_not_pass_task(workspace_root: Path) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     app = create_app(
         adapter=FixedAdapter("hello"),
         gate=ExplodingGate(),
@@ -266,9 +283,11 @@ def test_validator_exception_does_not_pass_task(workspace_root: Path) -> None:
         store=MemoryTaskStore(),
     )
     client = TestClient(app)
+    created = client.post("/tasks", json={"title": "T", "instruction": "I"})
+    assert created.status_code == 200
     response = client.post(
-        "/tasks",
-        json={"title": "T", "instruction": "I"},
+        f"/tasks/{created.json()['id']}/approve-plan",
+        json={"approved": True},
     )
     body = response.json()
     assert response.status_code == 200
@@ -297,17 +316,26 @@ def test_failed_check_never_marks_passed(workspace_root: Path) -> None:
         store=MemoryTaskStore(),
     )
     client = TestClient(app)
-    body = client.post("/tasks", json={"title": "T", "instruction": "I"}).json()
+    created = client.post("/tasks", json={"title": "T", "instruction": "I"}).json()
+    body = client.post(
+        f"/tasks/{created['id']}/approve-plan",
+        json={"approved": True},
+    ).json()
     assert body["status"] == "failed"
     assert body["quality"]["passed"] is False
 
 
 def test_omit_validation_profile_remains_compatible(client: TestClient) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     response = client.post("/tasks", json={"title": "Hello", "instruction": "Write greeting"})
     assert response.status_code == 200
     body = response.json()
     assert body["validation_profile"] == "generic_text"
-    assert body["status"] == "passed"
+    assert body["lifecycle"] == "awaiting_plan_approval"
+    approved = approve_plan(client, body["id"])
+    assert approved["status"] == "passed"
+    assert approved["lifecycle"] == "completed"
 
 
 def test_unknown_profile_http_422(client: TestClient) -> None:

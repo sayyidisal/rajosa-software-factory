@@ -60,8 +60,19 @@ class FixedOutputAdapter:
         title: str,
         instruction: str,
         workspace: WorkspaceWriter,
+        role: str = "implementer",
     ) -> AgentResult:
+        import json
+
+        from tests.orchestration_helpers import DEFAULT_PLAN
+
         self.calls += 1
+        if role == "planner":
+            plan = dict(DEFAULT_PLAN)
+            plan["requires_execution"] = True
+            content = json.dumps(plan)
+            workspace.write_text(task_id, "plan.json", content)
+            return AgentResult(output=content, artifact_name="plan.json")
         workspace.write_text(task_id, "result.txt", self.content)
         return AgentResult(output=self.content)
 
@@ -85,6 +96,8 @@ def _app(
 
 
 def _create_python_exec_task(client: TestClient) -> dict:
+    from tests.orchestration_helpers import approve_plan
+
     response = client.post(
         "/tasks",
         json={
@@ -94,7 +107,11 @@ def _create_python_exec_task(client: TestClient) -> dict:
         },
     )
     assert response.status_code == 200
-    return response.json()
+    body = response.json()
+    assert body["lifecycle"] == "awaiting_plan_approval"
+    approved = approve_plan(client, body["id"])
+    assert approved["lifecycle"] == "awaiting_execution_auth"
+    return approved
 
 
 # --- static profile compatibility ---
@@ -113,13 +130,15 @@ def test_python_unit_tests_still_static_only(tmp_path: Path) -> None:
     assert not any(c.name == "tests_passed" for c in report.checks)
 
 
-def test_python_test_execution_static_on_create_marks_not_requested(
+def test_python_test_execution_awaits_execution_auth(
     workspace_root: Path,
 ) -> None:
     runner = FakeExecutionRunner()
     client = _app(workspace_root, runner=runner)
     body = _create_python_exec_task(client)
-    assert body["status"] == "passed"
+    assert body["status"] == "pending"
+    assert body["lifecycle"] == "awaiting_execution_auth"
+    assert body["quality"]["passed"] is True
     assert body["execution"]["status"] == "not_requested"
     assert body["execution"]["tests_passed"] is False
     assert any(c["name"] == "execution_not_requested" for c in body["quality"]["checks"])
@@ -136,6 +155,7 @@ def test_create_task_never_starts_runner(workspace_root: Path) -> None:
     assert response.status_code == 200
     assert runner.calls == []
     assert response.json()["execution"]["status"] == "not_requested"
+    assert response.json()["lifecycle"] == "awaiting_plan_approval"
 
 
 def test_profile_alone_does_not_authorize_execution(workspace_root: Path) -> None:
@@ -166,6 +186,8 @@ def test_explicit_execute_invokes_runner_with_structured_request(
     body = response.json()
     assert body["execution"]["tests_passed"] is True
     assert body["execution"]["tests_executed"] is True
+    assert body["lifecycle"] == "completed"
+    assert body["status"] == "passed"
 
 
 def test_execute_without_confirm_rejected(workspace_root: Path) -> None:
@@ -179,6 +201,8 @@ def test_execute_without_confirm_rejected(workspace_root: Path) -> None:
 
 
 def test_execute_wrong_profile_rejected(workspace_root: Path) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     runner = FakeExecutionRunner()
     client = _app(
         workspace_root,
@@ -193,14 +217,35 @@ def test_execute_wrong_profile_rejected(workspace_root: Path) -> None:
             "validation_profile": "generic_text",
         },
     ).json()
+    approved = approve_plan(client, created["id"])
     response = client.post(
-        f"/tasks/{created['id']}/execute-tests",
+        f"/tasks/{approved['id']}/execute-tests",
         json={"confirm": True},
     )
     body = response.json()
     assert body["execution"]["status"] == "rejected"
     assert body["execution"]["runner_error_category"] == "unsupported_profile"
     assert body["execution"]["tests_passed"] is False
+    assert runner.calls == []
+
+
+def test_execute_before_plan_approval_rejected(workspace_root: Path) -> None:
+    runner = FakeExecutionRunner()
+    client = _app(workspace_root, runner=runner)
+    created = client.post(
+        "/tasks",
+        json={
+            "title": "Py tests",
+            "instruction": "three tests",
+            "validation_profile": "python_test_execution",
+        },
+    ).json()
+    assert created["lifecycle"] == "awaiting_plan_approval"
+    response = client.post(
+        f"/tasks/{created['id']}/execute-tests",
+        json={"confirm": True},
+    )
+    assert response.status_code == 422
     assert runner.calls == []
 
 
@@ -215,6 +260,8 @@ def test_runner_unavailable_fails_safely(workspace_root: Path) -> None:
     assert body["execution"]["status"] == "runner_unavailable"
     assert body["execution"]["tests_passed"] is False
     assert body["execution"]["tests_executed"] is False
+    assert body["lifecycle"] == "failed"
+    assert body["status"] == "failed"
 
 
 def test_nonzero_exit_is_test_failure(workspace_root: Path) -> None:
@@ -237,6 +284,7 @@ def test_nonzero_exit_is_test_failure(workspace_root: Path) -> None:
     assert body["execution"]["tests_passed"] is False
     assert body["execution"]["tests_executed"] is True
     assert body["execution"]["exit_code"] == 1
+    assert body["lifecycle"] == "failed"
 
 
 def test_timeout_never_passes(workspace_root: Path) -> None:
@@ -258,6 +306,7 @@ def test_timeout_never_passes(workspace_root: Path) -> None:
     ).json()
     assert body["execution"]["timed_out"] is True
     assert body["execution"]["tests_passed"] is False
+    assert body["lifecycle"] == "failed"
 
 
 def test_malformed_tests_passed_fail_closed() -> None:
@@ -504,17 +553,23 @@ def test_disabled_runner_on_explicit_request(workspace_root: Path) -> None:
     assert body["execution"]["status"] == "runner_unavailable"
     assert body["execution"]["runner_error_category"] == "feature_disabled"
     assert body["execution"]["tests_passed"] is False
+    assert body["lifecycle"] == "failed"
 
 
 def test_existing_generic_flow_compatible(workspace_root: Path) -> None:
     from app.agents.mock import MockAgentAdapter
+    from tests.orchestration_helpers import approve_plan
 
     client = _app(workspace_root, adapter=MockAgentAdapter())
-    body = client.post(
+    created = client.post(
         "/tasks",
         json={"title": "Hello", "instruction": "Say hi"},
     ).json()
+    assert created["lifecycle"] == "awaiting_plan_approval"
+    assert created["execution"]["status"] == "not_requested"
+    body = approve_plan(client, created["id"])
     assert body["status"] == "passed"
+    assert body["lifecycle"] == "completed"
     assert body["execution"]["status"] == "not_requested"
 
 

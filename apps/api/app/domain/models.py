@@ -3,6 +3,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.execution.models import ExecutionSummary
+from app.orchestration.events import OrchestrationEvent
+from app.orchestration.lifecycle import Lifecycle
+from app.orchestration.plan import Plan
 from app.quality.profiles import ValidationProfileName
 
 
@@ -28,7 +31,17 @@ class TaskCreate(BaseModel):
     instruction: str = Field(min_length=1, max_length=4000)
     validation_profile: ValidationProfileName = "generic_text"
     # Explicit execution is never authorized via task creation.
-    # Use POST /tasks/{id}/execute-tests with confirm=true.
+    # Explicit plan approval is never authorized via task creation.
+
+
+class PlanDecisionBody(BaseModel):
+    """Explicit user plan decision — never inferred from model output.
+
+    ``approved`` is required. ``true`` starts implementation at most once.
+    ``false`` rejects the plan without implementation. Missing field → 422.
+    """
+
+    approved: bool
 
 
 class Task(BaseModel):
@@ -36,8 +49,13 @@ class Task(BaseModel):
     title: str
     instruction: str
     validation_profile: ValidationProfileName = "generic_text"
-    status: Literal["passed", "failed"]
+    # Legacy compatibility: passed/failed for terminal outcomes; pending otherwise.
+    status: Literal["passed", "failed", "pending"]
+    lifecycle: Lifecycle = "created"
     output: str
     error: str | None
     quality: QualityReport
     execution: ExecutionSummary | None = None
+    plan: Plan | None = None
+    plan_approved: bool = False
+    events: list[OrchestrationEvent] = Field(default_factory=list)

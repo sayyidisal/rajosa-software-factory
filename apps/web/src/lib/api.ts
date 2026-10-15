@@ -17,6 +17,32 @@ export type ValidationProfile =
   | "python_code"
   | "python_test_execution";
 
+export type Lifecycle =
+  | "created"
+  | "planning"
+  | "awaiting_plan_approval"
+  | "generating"
+  | "validating"
+  | "awaiting_execution_auth"
+  | "completed"
+  | "failed";
+
+export type PlanStep = {
+  step_id: string;
+  description: string;
+  expected_artifacts: string[];
+  acceptance_checks: string[];
+};
+
+export type Plan = {
+  schema_version: string;
+  summary: string;
+  goals: string[];
+  steps: PlanStep[];
+  acceptance_checks: string[];
+  requires_execution: boolean;
+};
+
 export type ExecutionSummary = {
   execution_id: string;
   status: string;
@@ -37,11 +63,14 @@ export type Task = {
   title: string;
   instruction: string;
   validation_profile: ValidationProfile;
-  status: "passed" | "failed";
+  status: "passed" | "failed" | "pending";
+  lifecycle: Lifecycle;
   output: string;
   error: string | null;
   quality: QualityReport;
   execution?: ExecutionSummary | null;
+  plan?: Plan | null;
+  plan_approved?: boolean;
 };
 
 export type CreateTaskInput = {
@@ -62,6 +91,38 @@ export class ValidationError extends Error {
     super(message);
     this.name = "ValidationError";
   }
+}
+
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
+async function parseTaskResponse(response: Response): Promise<Task> {
+  if (response.status >= 500) {
+    throw new ApiUnavailableError();
+  }
+  if (response.status === 404) {
+    throw new ValidationError("Task tidak ditemukan.");
+  }
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new ConflictError(body?.detail || "Transisi tidak diizinkan.");
+  }
+  if (response.status === 422) {
+    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new ValidationError(
+      typeof body?.detail === "string"
+        ? body.detail
+        : "Permintaan tidak valid.",
+    );
+  }
+  if (!response.ok) {
+    throw new ApiUnavailableError();
+  }
+  return (await response.json()) as Task;
 }
 
 export async function fetchHealth(): Promise<boolean> {
@@ -108,6 +169,20 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   return (await response.json()) as Task;
 }
 
+export async function approvePlan(taskId: string, approved: boolean): Promise<Task> {
+  let response: Response;
+  try {
+    response = await fetch(`/backend/tasks/${encodeURIComponent(taskId)}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved }),
+    });
+  } catch {
+    throw new ApiUnavailableError();
+  }
+  return parseTaskResponse(response);
+}
+
 export async function executeTaskTests(taskId: string): Promise<Task> {
   let response: Response;
   try {
@@ -119,34 +194,39 @@ export async function executeTaskTests(taskId: string): Promise<Task> {
   } catch {
     throw new ApiUnavailableError();
   }
-
-  if (response.status === 404) {
-    throw new ValidationError("Task tidak ditemukan.");
-  }
-
-  if (response.status === 422) {
-    throw new ValidationError("Permintaan eksekusi tidak valid.");
-  }
-
-  if (response.status >= 500) {
-    throw new ApiUnavailableError();
-  }
-
-  if (!response.ok) {
-    throw new ApiUnavailableError();
-  }
-
-  return (await response.json()) as Task;
+  return parseTaskResponse(response);
 }
 
+/** Full task success: lifecycle completed and static quality passed. */
 export function isTaskSuccess(task: Task): boolean {
-  if (task.status !== "passed" || task.quality.passed !== true) {
+  if (task.lifecycle !== "completed" || task.status !== "passed") {
     return false;
   }
-  if (!task.quality.checks.length) {
+  if (task.quality.passed !== true || !task.quality.checks.length) {
     return false;
   }
   return task.quality.checks.every((check) => check.passed === true);
+}
+
+export function describeLifecycle(task: Task): string {
+  switch (task.lifecycle) {
+    case "awaiting_plan_approval":
+      return "Menunggu persetujuan rencana.";
+    case "awaiting_execution_auth":
+      return "Validasi statis lulus — menunggu otorisasi eksekusi runtime.";
+    case "completed":
+      return "Selesai.";
+    case "failed":
+      return "Gagal.";
+    case "planning":
+      return "Sedang merencanakan.";
+    case "generating":
+      return "Sedang menghasilkan artefak.";
+    case "validating":
+      return "Sedang validasi.";
+    default:
+      return task.lifecycle;
+  }
 }
 
 export function describeExecution(task: Task): string {

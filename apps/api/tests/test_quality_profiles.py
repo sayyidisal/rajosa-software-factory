@@ -34,8 +34,15 @@ class FixedOutputAdapter:
         title: str,
         instruction: str,
         workspace: WorkspaceWriter,
+        role: str = "implementer",
     ) -> AgentResult:
+        from tests.orchestration_helpers import DEFAULT_PLAN
+
         self.calls += 1
+        if role == "planner":
+            plan = json.dumps(DEFAULT_PLAN)
+            workspace.write_text(task_id, "plan.json", plan)
+            return AgentResult(output=plan, artifact_name="plan.json")
         workspace.write_text(task_id, self.artifact_name, self.content)
         return AgentResult(output=self.content, artifact_name=self.artifact_name)
 
@@ -194,6 +201,8 @@ def test_unknown_profile_fails_clearly(tmp_path: Path) -> None:
 
 
 def test_task_validation_failure_marks_failed(workspace_root: Path) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     adapter = FixedOutputAdapter("{bad")
     app = create_app(
         adapter=adapter,
@@ -202,7 +211,7 @@ def test_task_validation_failure_marks_failed(workspace_root: Path) -> None:
         store=MemoryTaskStore(),
     )
     client = TestClient(app)
-    response = client.post(
+    created = client.post(
         "/tasks",
         json={
             "title": "Catalog",
@@ -210,15 +219,18 @@ def test_task_validation_failure_marks_failed(workspace_root: Path) -> None:
             "validation_profile": "product_catalog_json",
         },
     )
-    body = response.json()
-    assert response.status_code == 200
+    assert created.status_code == 200
+    assert created.json()["lifecycle"] == "awaiting_plan_approval"
+    body = approve_plan(client, created.json()["id"])
     assert body["status"] == "failed"
     assert body["quality"]["passed"] is False
     assert body["error"] and body["error"].startswith("Validation failed:")
-    assert adapter.calls == 1
+    assert adapter.calls == 2
 
 
 def test_task_validation_success_marks_passed(workspace_root: Path) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     adapter = FixedOutputAdapter(json.dumps(VALID_PRODUCTS))
     app = create_app(
         adapter=adapter,
@@ -227,16 +239,17 @@ def test_task_validation_success_marks_passed(workspace_root: Path) -> None:
         store=MemoryTaskStore(),
     )
     client = TestClient(app)
-    response = client.post(
+    created = client.post(
         "/tasks",
         json={
             "title": "Catalog",
             "instruction": "Return products JSON",
             "validation_profile": "product_catalog_json",
         },
-    )
-    body = response.json()
+    ).json()
+    body = approve_plan(client, created["id"])
     assert body["status"] == "passed"
+    assert body["lifecycle"] == "completed"
     assert body["quality"]["passed"] is True
     assert body["error"] is None
     assert body["validation_profile"] == "product_catalog_json"
@@ -255,12 +268,16 @@ def test_unknown_profile_rejected_by_api(client: TestClient) -> None:
 
 
 def test_mock_adapter_still_passes_generic(client: TestClient) -> None:
+    from tests.orchestration_helpers import approve_plan
+
     response = client.post(
         "/tasks",
         json={"title": "Hello", "instruction": "Write a greeting"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "passed"
-    assert body["validation_profile"] == "generic_text"
-    assert body["output"].startswith("Mock result")
+    assert body["lifecycle"] == "awaiting_plan_approval"
+    approved = approve_plan(client, body["id"])
+    assert approved["status"] == "passed"
+    assert approved["validation_profile"] == "generic_text"
+    assert approved["output"].startswith("Mock result")

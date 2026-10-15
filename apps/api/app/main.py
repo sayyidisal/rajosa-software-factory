@@ -13,6 +13,7 @@ from app.domain.store import MemoryTaskStore
 from app.execution.concurrency import GLOBAL_EXECUTION_GATE
 from app.execution.factory import build_execution_runner
 from app.execution.service import ExecutionService
+from app.orchestration.service import OrchestratorService
 from app.quality.basic import BasicQualityGate
 from app.workspaces.local import LocalWorkspace
 
@@ -60,12 +61,13 @@ def create_app(
         allow_headers=["*"],
     )
 
-    task_service = TaskService(
+    orchestrator = OrchestratorService(
         adapter=selected_adapter,
         gate=selected_gate,
         workspace=selected_workspace,
         store=selected_store,
     )
+    task_service = TaskService(orchestrator)
     execution_service = ExecutionService(
         runner=selected_runner,
         workspace=selected_workspace,
@@ -73,7 +75,9 @@ def create_app(
         gate=selected_gate,
         gate_lock=selected_execution_gate,
         staging_base=selected_workspace.root,
+        lifecycle_hook=orchestrator.apply_execution_outcome,
     )
+    app.state.orchestrator = orchestrator
     app.state.task_service = task_service
     app.state.execution_service = execution_service
     app.state.settings = settings
