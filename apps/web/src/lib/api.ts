@@ -27,11 +27,23 @@ export type Lifecycle =
   | "completed"
   | "failed";
 
+export type AcceptanceCheckKind =
+  | "human_review"
+  | "artifact_present"
+  | "quality_profile"
+  | "runtime_tests";
+
+export type AcceptanceCheck = {
+  check_id: string;
+  description: string;
+  kind: AcceptanceCheckKind;
+};
+
 export type PlanStep = {
   step_id: string;
   description: string;
   expected_artifacts: string[];
-  acceptance_checks: string[];
+  acceptance_check_ids: string[];
 };
 
 export type Plan = {
@@ -39,7 +51,7 @@ export type Plan = {
   summary: string;
   goals: string[];
   steps: PlanStep[];
-  acceptance_checks: string[];
+  acceptance_checks: AcceptanceCheck[];
   requires_execution: boolean;
 };
 

@@ -2,22 +2,51 @@ import json
 
 from app.agents.base import AgentRole, WorkspaceWriter
 from app.domain.models import AgentResult
+from app.quality.profiles import profile_requires_runtime
 
-_PLAN = {
-    "schema_version": "1",
-    "summary": "Produce the requested artifact for the task.",
-    "goals": ["Satisfy the validation profile", "Keep the change small"],
-    "steps": [
+
+def build_mock_plan(*, validation_profile: str) -> dict:
+    """Deterministic Plan v2 payload for the mock planner."""
+    requires_execution = profile_requires_runtime(validation_profile)
+    checks = [
         {
-            "step_id": "implement",
-            "description": "Generate the primary result artifact.",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["Artifact present", "Quality gate passes"],
-        }
-    ],
-    "acceptance_checks": ["Deterministic quality gate passes"],
-    "requires_execution": False,
-}
+            "check_id": "chk_artifact",
+            "description": "Primary artifact present after generation",
+            "kind": "artifact_present",
+        },
+        {
+            "check_id": "chk_profile",
+            "description": "Selected validation profile quality gate passes",
+            "kind": "quality_profile",
+        },
+    ]
+    if requires_execution:
+        checks.append(
+            {
+                "check_id": "chk_runtime",
+                "description": "Isolated runtime tests pass after explicit authorization",
+                "kind": "runtime_tests",
+            }
+        )
+    return {
+        "schema_version": "2",
+        "summary": (
+            "Produce Python unit tests for isolated execution."
+            if requires_execution
+            else "Produce the requested artifact for the task."
+        ),
+        "goals": ["Satisfy the validation profile", "Keep the change small"],
+        "steps": [
+            {
+                "step_id": "implement",
+                "description": "Generate the primary result artifact.",
+                "expected_artifacts": ["result.txt"],
+                "acceptance_check_ids": [check["check_id"] for check in checks],
+            }
+        ],
+        "acceptance_checks": checks,
+        "requires_execution": requires_execution,
+    }
 
 
 class MockAgentAdapter:
@@ -29,18 +58,10 @@ class MockAgentAdapter:
         instruction: str,
         workspace: WorkspaceWriter,
         role: AgentRole = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
         if role == "planner":
-            # Align requires_execution with common python_test_execution keyword in instruction.
-            plan = dict(_PLAN)
-            lowered = instruction.lower()
-            plan["requires_execution"] = "python_test_execution" in lowered or "runtime" in lowered
-            if plan["requires_execution"]:
-                plan["summary"] = "Produce Python unit tests for isolated execution."
-                plan["acceptance_checks"] = [
-                    "Static AST checks pass",
-                    "Isolated runtime tests pass after explicit authorization",
-                ]
+            plan = build_mock_plan(validation_profile=validation_profile)
             content = json.dumps(plan, indent=2)
             workspace.write_text(task_id, "plan.json", content)
             return AgentResult(output=content, artifact_name="plan.json")

@@ -149,10 +149,14 @@ export function TaskPanel() {
     if (!plan) {
       return null;
     }
+    const checksById = new Map(
+      plan.acceptance_checks.map((check) => [check.check_id, check]),
+    );
     return (
       <div className="plan-block">
         <p>
-          <span className="muted">Rencana:</span> {plan.summary}
+          <span className="muted">Rencana (schema {plan.schema_version}):</span>{" "}
+          {plan.summary}
         </p>
         <p>
           <span className="muted">Memerlukan eksekusi runtime:</span>{" "}
@@ -169,11 +173,27 @@ export function TaskPanel() {
           {plan.steps.map((step) => (
             <li key={step.step_id}>
               <strong>{step.step_id}</strong>: {step.description}
-              {step.acceptance_checks.length ? (
+              {step.expected_artifacts.length ? (
                 <ul>
-                  {step.acceptance_checks.map((check) => (
-                    <li key={check}>{check}</li>
+                  {step.expected_artifacts.map((name) => (
+                    <li key={name}>artifact: {name}</li>
                   ))}
+                </ul>
+              ) : (
+                <p className="muted">Tidak ada expected_artifacts pada langkah ini.</p>
+              )}
+              {step.acceptance_check_ids.length ? (
+                <ul>
+                  {step.acceptance_check_ids.map((checkId) => {
+                    const check = checksById.get(checkId);
+                    return (
+                      <li key={checkId}>
+                        {check
+                          ? `${check.check_id} (${check.kind}): ${check.description}`
+                          : checkId}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </li>
@@ -181,10 +201,12 @@ export function TaskPanel() {
         </ol>
         {plan.acceptance_checks.length ? (
           <>
-            <p className="muted">Acceptance checks</p>
+            <p className="muted">Acceptance checks (deklaratif — bukan bukti runtime)</p>
             <ul>
               {plan.acceptance_checks.map((check) => (
-                <li key={check}>{check}</li>
+                <li key={check.check_id}>
+                  <strong>{check.check_id}</strong> [{check.kind}]: {check.description}
+                </li>
               ))}
             </ul>
           </>

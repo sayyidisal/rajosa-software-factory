@@ -76,6 +76,10 @@ API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang
 
 Orchestrator deterministik + approval rencana wajib: [agent-orchestration-design.md](./agent-orchestration-design.md).
 
+## Perencanaan terstruktur (Phase 4C)
+
+Kontrak rencana `schema_version: "2"`, JSON ketat, dan digest approval (plan + profile): [phase-4c-design.md](./phase-4c-design.md).
+
 ## Keputusan yang ditunda
 
 SQLite/persistensi durable (4E), retry terbatas (4F), reviewer agent (4D), autentikasi, worker asinkron, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.

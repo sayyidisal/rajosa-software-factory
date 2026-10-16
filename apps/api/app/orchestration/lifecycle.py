@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Literal
 
+# Re-export from the authoritative profile module (avoid duplicated runtime sets).
+from app.quality.profiles import (  # noqa: F401
+    RUNTIME_REQUIRED_PROFILES,
+    profile_requires_runtime,
+)
+
 Lifecycle = Literal[
     "created",
     "planning",
@@ -14,9 +20,6 @@ Lifecycle = Literal[
     "completed",
     "failed",
 ]
-
-# Profiles that require verified runtime tests before lifecycle=completed.
-RUNTIME_REQUIRED_PROFILES = frozenset({"python_test_execution"})
 
 LEGAL_TRANSITIONS: dict[Lifecycle, frozenset[Lifecycle]] = {
     "created": frozenset({"planning", "failed"}),
@@ -50,7 +53,3 @@ def legacy_status_for(lifecycle: Lifecycle) -> Literal["passed", "failed", "pend
     if lifecycle == "failed":
         return "failed"
     return "pending"
-
-
-def profile_requires_runtime(validation_profile: str) -> bool:
-    return validation_profile in RUNTIME_REQUIRED_PROFILES

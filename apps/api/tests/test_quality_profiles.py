@@ -35,12 +35,13 @@ class FixedOutputAdapter:
         instruction: str,
         workspace: WorkspaceWriter,
         role: str = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
-        from tests.orchestration_helpers import DEFAULT_PLAN
+        from app.agents.mock import build_mock_plan
 
         self.calls += 1
         if role == "planner":
-            plan = json.dumps(DEFAULT_PLAN)
+            plan = json.dumps(build_mock_plan(validation_profile=validation_profile))
             workspace.write_text(task_id, "plan.json", plan)
             return AgentResult(output=plan, artifact_name="plan.json")
         workspace.write_text(task_id, self.artifact_name, self.content)

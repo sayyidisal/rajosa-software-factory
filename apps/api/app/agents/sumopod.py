@@ -43,13 +43,18 @@ def _default_client_factory(settings: Settings) -> OpenAI:
 def _system_prompt_for_role(role: AgentRole) -> str:
     if role == "planner":
         return (
-            "You are a planning assistant. Return ONLY a JSON object matching this schema: "
-            '{"schema_version":"1","summary":"...","goals":["..."],'
+            "You are a planning assistant. Return ONLY a single JSON object (no Markdown "
+            "fences, no prose) matching schema_version \"2\": "
+            '{"schema_version":"2","summary":"...","goals":["..."],'
             '"steps":[{"step_id":"...","description":"...","expected_artifacts":["result.txt"],'
-            '"acceptance_checks":["..."]}],"acceptance_checks":["..."],'
-            '"requires_execution":false}. '
+            '"acceptance_check_ids":["chk_profile"]}],'
+            '"acceptance_checks":[{"check_id":"chk_profile","description":"...",'
+            '"kind":"quality_profile"}],"requires_execution":false}. '
+            "Allowed acceptance check kinds: human_review, artifact_present, "
+            "quality_profile, runtime_tests. "
+            "For runtime-required profiles include a runtime_tests check. "
             "Do not include shell commands, Docker options, environment variables, "
-            "or execution authorization fields. "
+            "tools, permissions, or execution authorization fields. "
             "Do not claim that you executed code or approved the plan."
         )
     return (
@@ -77,6 +82,7 @@ class SumoPodAgentAdapter:
         instruction: str,
         workspace: WorkspaceWriter,
         role: AgentRole = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
         api_key = (self._settings.sumopod_api_key or "").strip()
         if not api_key:
@@ -86,6 +92,11 @@ class SumoPodAgentAdapter:
         instruction = instruction[:4000]
         client = self._client_factory(self._settings)
         system_content = _system_prompt_for_role(role)
+        user_content = (
+            f"Title: {title}\n"
+            f"Validation profile: {validation_profile}\n\n"
+            f"Instruction:\n{instruction}"
+        )
 
         try:
             response = client.chat.completions.create(
@@ -97,7 +108,7 @@ class SumoPodAgentAdapter:
                     },
                     {
                         "role": "user",
-                        "content": f"Title: {title}\n\nInstruction:\n{instruction}",
+                        "content": user_content,
                     },
                 ],
             )

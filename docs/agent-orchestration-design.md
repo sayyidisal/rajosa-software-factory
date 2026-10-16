@@ -201,7 +201,7 @@ curl -s http://127.0.0.1:8000/tasks/<id>/execute-tests \
 |---|---|
 | 4A Design | Done |
 | 4B Minimal orchestrator + mandatory plan approval | **Done** |
-| 4C Richer planning / decomposition | Not started |
+| 4C Structured plan v2 + strict validation | **Done** — see [phase-4c-design.md](./phase-4c-design.md) |
 | 4D Artifact provenance / optional reviewer | Not started |
 | 4E SQLite persistence | Not started |
 | 4F Bounded retry + evaluation harness | Not started |

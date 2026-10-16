@@ -42,6 +42,7 @@ class ExplodingAdapter:
         instruction: str,
         workspace,
         role: str = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
         self.calls += 1
         raise RuntimeError(f"boom with {self.secret}")

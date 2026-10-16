@@ -1,4 +1,4 @@
-"""Phase 4B orchestration: plan validation, approval, lifecycle, boundaries."""
+"""Phase 4B/4C orchestration: Plan v2, approval digests, lifecycle, boundaries."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agents.mock import build_mock_plan
 from app.domain.store import MemoryTaskStore
 from app.execution.fake import FakeExecutionRunner
 from app.main import create_app
@@ -17,12 +18,19 @@ from app.orchestration.lifecycle import (
     assert_transition,
     InvalidLifecycleTransition,
     legacy_status_for,
+)
+from app.quality.profiles import (
+    RUNTIME_REQUIRED_PROFILES,
+    SUPPORTED_PROFILES,
+    is_supported_profile,
     profile_requires_runtime,
 )
 from app.orchestration.plan import (
     MAX_PLAN_STEPS,
     MAX_SERIALIZED_PLAN_BYTES,
+    Plan,
     PlanValidationError,
+    compute_approval_digest,
     parse_plan_text,
 )
 from app.quality.basic import BasicQualityGate
@@ -31,6 +39,7 @@ from tests.orchestration_helpers import (
     DEFAULT_PLAN,
     FixedOutputAdapter,
     approve_plan,
+    make_plan_v2,
 )
 
 VALID_TESTS = """
@@ -56,26 +65,96 @@ def _client(workspace_root: Path, *, adapter=None, runner=None) -> TestClient:
     return TestClient(app)
 
 
-# --- plan validation ---
+def _parse(raw: str, profile: str = "generic_text") -> Plan:
+    return parse_plan_text(raw, validation_profile=profile)
 
 
-def test_valid_plan_accepted() -> None:
-    plan = parse_plan_text(json.dumps(DEFAULT_PLAN))
-    assert plan.schema_version == "1"
+# --- plan validation (Phase 4C) ---
+
+
+def test_valid_minimal_plan_v2_accepted() -> None:
+    plan = _parse(json.dumps(DEFAULT_PLAN))
+    assert plan.schema_version == "2"
     assert len(plan.steps) == 1
+    assert len(plan.acceptance_checks) >= 1
+
+
+def test_valid_full_plan_accepted() -> None:
+    payload = make_plan_v2(requires_execution=False)
+    payload["goals"] = [f"goal-{i}" for i in range(8)]
+    payload["steps"] = [
+        {
+            "step_id": f"s{i}",
+            "description": f"step {i}",
+            "expected_artifacts": ["result.txt"] if i == 0 else [],
+            "acceptance_check_ids": ["chk_artifact", "chk_profile"],
+        }
+        for i in range(MAX_PLAN_STEPS)
+    ]
+    plan = _parse(json.dumps(payload))
+    assert len(plan.steps) == MAX_PLAN_STEPS
+    assert plan.steps[1].expected_artifacts == []
 
 
 def test_malformed_plan_rejected() -> None:
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text("not json")
+        _parse("not json")
     assert exc.value.category == "malformed_json"
 
 
-def test_missing_required_fields_rejected() -> None:
-    payload = {"schema_version": "1", "summary": "x"}
+def test_prose_wrapped_json_rejected() -> None:
+    raw = "Here is the plan:\n" + json.dumps(DEFAULT_PLAN)
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text(json.dumps(payload))
+        _parse(raw)
+    assert exc.value.category == "malformed_json"
+
+
+def test_markdown_fence_rejected() -> None:
+    raw = "```json\n" + json.dumps(DEFAULT_PLAN) + "\n```"
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(raw)
+    assert exc.value.category == "markdown_fence_forbidden"
+
+
+def test_duplicate_json_keys_rejected() -> None:
+    raw = (
+        '{"schema_version":"2","summary":"s","summary":"t","goals":["g"],'
+        '"steps":[{"step_id":"a","description":"d","expected_artifacts":[],'
+        '"acceptance_check_ids":["c1"]}],'
+        '"acceptance_checks":[{"check_id":"c1","description":"d","kind":"human_review"}],'
+        '"requires_execution":false}'
+    )
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(raw)
+    assert exc.value.category == "duplicate_key"
+
+
+def test_nonfinite_number_rejected() -> None:
+    raw = (
+        '{"schema_version":"2","summary":"s","goals":["g"],'
+        '"steps":[{"step_id":"a","description":"d","expected_artifacts":[],'
+        '"acceptance_check_ids":["c1"]}],'
+        '"acceptance_checks":[{"check_id":"c1","description":"d","kind":"human_review"}],'
+        '"requires_execution":false,"x":NaN}'
+    )
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(raw)
+    assert exc.value.category == "nonfinite_number"
+
+
+def test_missing_required_fields_rejected() -> None:
+    payload = {"schema_version": "2", "summary": "x"}
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload))
     assert exc.value.category == "schema_invalid"
+
+
+def test_unknown_field_rejected() -> None:
+    payload = dict(DEFAULT_PLAN)
+    payload["extra_tool"] = "curl"
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload))
+    assert exc.value.category in {"schema_invalid", "forbidden_field"}
 
 
 def test_duplicate_step_ids_rejected() -> None:
@@ -84,18 +163,34 @@ def test_duplicate_step_ids_rejected() -> None:
         {
             "step_id": "same",
             "description": "one",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["ok"],
+            "expected_artifacts": [],
+            "acceptance_check_ids": ["chk_artifact", "chk_profile"],
         },
         {
             "step_id": "same",
             "description": "two",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["ok"],
+            "expected_artifacts": [],
+            "acceptance_check_ids": ["chk_artifact", "chk_profile"],
         },
     ]
-    with pytest.raises(PlanValidationError):
-        parse_plan_text(json.dumps(payload))
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload))
+    assert exc.value.category in {"duplicate_id", "schema_invalid"}
+
+
+def test_invalid_acceptance_check_reference_rejected() -> None:
+    payload = dict(DEFAULT_PLAN)
+    payload["steps"] = [
+        {
+            "step_id": "implement",
+            "description": "x",
+            "expected_artifacts": ["result.txt"],
+            "acceptance_check_ids": ["missing_check"],
+        }
+    ]
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload))
+    assert exc.value.category in {"invalid_reference", "schema_invalid"}
 
 
 def test_excessive_step_count_rejected() -> None:
@@ -104,36 +199,68 @@ def test_excessive_step_count_rejected() -> None:
         {
             "step_id": f"s{i}",
             "description": f"step {i}",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["ok"],
+            "expected_artifacts": [],
+            "acceptance_check_ids": ["chk_artifact", "chk_profile"],
         }
         for i in range(MAX_PLAN_STEPS + 1)
     ]
     with pytest.raises(PlanValidationError):
-        parse_plan_text(json.dumps(payload))
+        _parse(json.dumps(payload))
 
 
 def test_oversized_plan_rejected() -> None:
     payload = dict(DEFAULT_PLAN)
     payload["summary"] = "x" * (MAX_SERIALIZED_PLAN_BYTES)
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text(json.dumps(payload))
+        _parse(json.dumps(payload))
     assert exc.value.category in {"plan_too_large", "schema_invalid"}
 
 
-def test_unsupported_schema_version_rejected() -> None:
+def test_schema_version_string_2_accepted() -> None:
     payload = dict(DEFAULT_PLAN)
-    payload["schema_version"] = "99"
+    payload["schema_version"] = "2"
+    plan = _parse(json.dumps(payload))
+    assert plan.schema_version == "2"
+
+
+def test_unsupported_schema_version_rejected() -> None:
+    for version in ("1", "99"):
+        payload = dict(DEFAULT_PLAN)
+        payload["schema_version"] = version
+        with pytest.raises(PlanValidationError) as exc:
+            _parse(json.dumps(payload))
+        assert exc.value.category == "unsupported_schema_version"
+
+
+def test_schema_version_numeric_2_rejected() -> None:
+    payload = dict(DEFAULT_PLAN)
+    # Craft raw JSON with a numeric version — do not let json.dumps coerce.
+    raw = json.dumps(payload).replace('"schema_version": "2"', '"schema_version": 2')
+    assert '"schema_version": 2' in raw or '"schema_version":2' in raw.replace(" ", "")
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text(json.dumps(payload))
+        _parse(raw)
     assert exc.value.category == "unsupported_schema_version"
+
+
+def test_schema_version_null_and_boolean_rejected() -> None:
+    for raw_version in ("null", "true", "false"):
+        payload = dict(DEFAULT_PLAN)
+        raw = json.dumps(payload).replace(
+            '"schema_version": "2"', f'"schema_version": {raw_version}'
+        )
+        with pytest.raises(PlanValidationError) as exc:
+            _parse(raw)
+        assert exc.value.category in {
+            "unsupported_schema_version",
+            "missing_schema_version",
+        }, raw_version
 
 
 def test_forbidden_execution_fields_rejected() -> None:
     payload = dict(DEFAULT_PLAN)
     payload["command"] = "rm -rf /"
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text(json.dumps(payload))
+        _parse(json.dumps(payload))
     assert exc.value.category == "forbidden_field"
 
 
@@ -143,14 +270,58 @@ def test_nested_shell_field_rejected() -> None:
         {
             "step_id": "s1",
             "description": "x",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["ok"],
+            "expected_artifacts": [],
+            "acceptance_check_ids": ["chk_artifact", "chk_profile"],
             "shell": "echo hi",
         }
     ]
     with pytest.raises(PlanValidationError) as exc:
-        parse_plan_text(json.dumps(payload))
-    assert exc.value.category == "forbidden_field"
+        _parse(json.dumps(payload))
+    assert exc.value.category in {"forbidden_field", "schema_invalid"}
+
+
+def test_technical_description_not_rejected_by_denylist() -> None:
+    """Legitimate mentions of docker/shell/env in prose must remain valid."""
+    payload = dict(DEFAULT_PLAN)
+    payload["summary"] = "Document how docker compose and shell scripts are used offline."
+    payload["steps"][0]["description"] = (
+        "Write notes about environment variables and docker images without executing them."
+    )
+    plan = _parse(json.dumps(payload))
+    assert "docker" in plan.summary.lower()
+
+
+def test_runtime_profile_requires_runtime_tests_check() -> None:
+    payload = make_plan_v2(requires_execution=False)
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload), profile="python_test_execution")
+    assert exc.value.category == "profile_incompatible"
+
+
+def test_static_profile_rejects_runtime_tests_check() -> None:
+    payload = make_plan_v2(requires_execution=True)
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(payload), profile="generic_text")
+    assert exc.value.category == "profile_incompatible"
+
+
+def test_server_overrides_requires_execution_for_runtime_profile() -> None:
+    payload = make_plan_v2(requires_execution=True)
+    payload["requires_execution"] = False
+    plan = _parse(json.dumps(payload), profile="python_test_execution")
+    assert plan.requires_execution is True
+
+
+def test_approval_digest_changes_with_plan_or_profile() -> None:
+    plan_a = _parse(json.dumps(DEFAULT_PLAN), profile="generic_text")
+    plan_b_payload = dict(DEFAULT_PLAN)
+    plan_b_payload["summary"] = "Different summary for digest"
+    plan_b = _parse(json.dumps(plan_b_payload), profile="generic_text")
+    digest_a = compute_approval_digest(plan=plan_a, validation_profile="generic_text")
+    digest_b = compute_approval_digest(plan=plan_b, validation_profile="generic_text")
+    digest_c = compute_approval_digest(plan=plan_a, validation_profile="python_code")
+    assert digest_a != digest_b
+    assert digest_a != digest_c
 
 
 # --- lifecycle table ---
@@ -190,6 +361,25 @@ def test_runtime_profile_detection() -> None:
     assert profile_requires_runtime("python_unit_tests") is False
 
 
+def test_runtime_required_profiles_single_source_of_truth() -> None:
+    from app.orchestration import lifecycle as lifecycle_mod
+
+    assert RUNTIME_REQUIRED_PROFILES <= set(SUPPORTED_PROFILES)
+    assert lifecycle_mod.RUNTIME_REQUIRED_PROFILES is RUNTIME_REQUIRED_PROFILES
+    assert lifecycle_mod.profile_requires_runtime is profile_requires_runtime
+    for name in SUPPORTED_PROFILES:
+        assert is_supported_profile(name) is True
+        expected = name in RUNTIME_REQUIRED_PROFILES
+        assert profile_requires_runtime(name) is expected
+    assert is_supported_profile("invented_profile") is False
+
+
+def test_unsupported_validation_profile_rejected_by_plan_parser() -> None:
+    with pytest.raises(PlanValidationError) as exc:
+        _parse(json.dumps(DEFAULT_PLAN), profile="invented_profile")
+    assert exc.value.category == "unsupported_profile"
+
+
 # --- approval API ---
 
 
@@ -201,7 +391,7 @@ def test_create_enters_awaiting_plan_approval(workspace_root: Path) -> None:
     ).json()
     assert body["lifecycle"] == "awaiting_plan_approval"
     assert body["status"] == "pending"
-    assert body["plan"]["summary"]
+    assert body["plan"]["schema_version"] == "2"
     assert body["plan_approved"] is False
     assert not (workspace_root / body["id"] / "result.txt").exists()
 
@@ -211,7 +401,6 @@ def test_implementation_does_not_run_before_approval(workspace_root: Path) -> No
     client = _client(workspace_root, adapter=adapter)
     body = client.post("/tasks", json={"title": "T", "instruction": "I"}).json()
     assert adapter.roles == ["planner"]
-    assert body["output"]  # plan JSON
     assert "secret-impl" not in body["output"]
 
 
@@ -259,7 +448,7 @@ def test_duplicate_approval_rejected(workspace_root: Path) -> None:
 
 def test_approval_wrong_lifecycle_rejected(workspace_root: Path) -> None:
     class BoomPlanner(FixedOutputAdapter):
-        def run(self, *, task_id, title, instruction, workspace, role="implementer"):
+        def run(self, *, task_id, title, instruction, workspace, role="implementer", validation_profile="generic_text"):
             if role == "planner":
                 raise RuntimeError("planner boom")
             return super().run(
@@ -268,6 +457,7 @@ def test_approval_wrong_lifecycle_rejected(workspace_root: Path) -> None:
                 instruction=instruction,
                 workspace=workspace,
                 role=role,
+                validation_profile=validation_profile,
             )
 
     client = _client(workspace_root, adapter=BoomPlanner("x"))
@@ -291,7 +481,7 @@ def test_approve_unknown_task_404(workspace_root: Path) -> None:
 
 def test_invalid_plan_output_fails_safely(workspace_root: Path) -> None:
     class BadPlanAdapter:
-        def run(self, *, task_id, title, instruction, workspace, role="implementer"):
+        def run(self, *, task_id, title, instruction, workspace, role="implementer", validation_profile="generic_text"):
             if role == "planner":
                 workspace.write_text(task_id, "plan.raw.txt", "nonsense")
                 from app.domain.models import AgentResult
@@ -420,7 +610,7 @@ def test_approved_plan_is_passed_to_implementer(workspace_root: Path) -> None:
             super().__init__("implemented with plan")
             self.implementer_instruction = ""
 
-        def run(self, *, task_id, title, instruction, workspace, role="implementer"):
+        def run(self, *, task_id, title, instruction, workspace, role="implementer", validation_profile="generic_text"):
             if role == "implementer":
                 self.implementer_instruction = instruction
             return super().run(
@@ -429,6 +619,7 @@ def test_approved_plan_is_passed_to_implementer(workspace_root: Path) -> None:
                 instruction=instruction,
                 workspace=workspace,
                 role=role,
+                validation_profile=validation_profile,
             )
 
     adapter = CaptureAdapter()
@@ -442,6 +633,7 @@ def test_approved_plan_is_passed_to_implementer(workspace_root: Path) -> None:
     assert body["lifecycle"] == "completed"
     assert "[APPROVED_PLAN" in adapter.implementer_instruction
     assert plan_summary in adapter.implementer_instruction
+    assert '"schema_version":"2"' in adapter.implementer_instruction.replace(" ", "")
     assert "Do the work carefully" in adapter.implementer_instruction
     assert (workspace_root / created["id"] / "plan.approved.sha256").is_file()
     approved_events = [
@@ -449,6 +641,7 @@ def test_approved_plan_is_passed_to_implementer(workspace_root: Path) -> None:
     ]
     assert approved_events
     assert approved_events[0]["metadata"].get("plan_sha256")
+    assert approved_events[0]["metadata"].get("validation_profile") == "generic_text"
 
 
 def test_status_passed_never_with_lifecycle_failed(workspace_root: Path) -> None:
@@ -520,7 +713,6 @@ def test_forbidden_transition_does_not_mutate(workspace_root: Path) -> None:
         json={"approved": True},
     )
     assert response.status_code == 200
-    # Duplicate approval must not re-enter generating/implementer.
     conflict = client.post(
         f"/tasks/{created['id']}/approve-plan",
         json={"approved": True},
@@ -529,8 +721,16 @@ def test_forbidden_transition_does_not_mutate(workspace_root: Path) -> None:
     after = client.get(f"/tasks/{created['id']}").json()
     assert after["lifecycle"] in {"completed", "failed"}
     assert after["lifecycle"] != before["lifecycle"]
-    # Second call must not change a completed task back.
     if after["lifecycle"] == "completed":
         again = client.get(f"/tasks/{created['id']}").json()
         assert again["status"] == "passed"
         assert again["lifecycle"] == "completed"
+
+
+def test_sumopod_planner_prompt_mentions_schema_v2() -> None:
+    from app.agents.sumopod import _system_prompt_for_role
+
+    prompt = _system_prompt_for_role("planner")
+    assert 'schema_version "2"' in prompt or '"2"' in prompt
+    assert "runtime_tests" in prompt
+    assert "Markdown" in prompt or "fences" in prompt

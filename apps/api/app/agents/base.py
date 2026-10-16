@@ -19,5 +19,6 @@ class AgentAdapter(Protocol):
         instruction: str,
         workspace: WorkspaceWriter,
         role: AgentRole = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
         """Execute one agent role and return its result."""

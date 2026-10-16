@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import threading
 import uuid
@@ -17,9 +16,14 @@ from app.orchestration.lifecycle import (
     Lifecycle,
     assert_transition,
     legacy_status_for,
-    profile_requires_runtime,
 )
-from app.orchestration.plan import PlanValidationError, parse_plan_text
+from app.quality.profiles import profile_requires_runtime
+from app.orchestration.plan import (
+    PlanValidationError,
+    canonical_plan_json,
+    compute_approval_digest,
+    parse_plan_text,
+)
 from app.quality.base import QualityGate
 from app.quality.profiles import ValidationProfileName
 from app.workspaces.local import LocalWorkspace
@@ -97,6 +101,7 @@ class OrchestratorService:
                 instruction=instruction,
                 workspace=self.workspace,
                 role="planner",
+                validation_profile=validation_profile,
             )
         except AgentError as exc:
             return self._fail(task, error=exc.public_message, category="agent_error")
@@ -105,7 +110,10 @@ class OrchestratorService:
             return self._fail(task, error=SAFE_AGENT_ERROR, category="agent_error")
 
         try:
-            plan = parse_plan_text(result.output)
+            plan = parse_plan_text(
+                result.output,
+                validation_profile=validation_profile,
+            )
         except PlanValidationError as exc:
             self.workspace.write_text(task_id, "plan.raw.txt", result.output[:4000])
             return self._fail(
@@ -115,13 +123,7 @@ class OrchestratorService:
                 event_type="plan.invalid",
             )
 
-        # Server decides requires_execution from profile, not only model claim.
-        if profile_requires_runtime(validation_profile):
-            plan = plan.model_copy(update={"requires_execution": True})
-        elif plan.requires_execution and not profile_requires_runtime(validation_profile):
-            # Model cannot force runtime for static-only profiles.
-            plan = plan.model_copy(update={"requires_execution": False})
-
+        # requires_execution already overridden inside parse_plan_text from profile.
         self.workspace.write_text(task_id, "plan.json", plan.model_dump_json(indent=2))
         task = task.model_copy(update={"plan": plan, "output": result.output})
         task = self._append_event(
@@ -131,7 +133,11 @@ class OrchestratorService:
                 event_type="plan.generated",
                 from_lifecycle="planning",
                 to_lifecycle="planning",
-                metadata={"steps": len(plan.steps)},
+                metadata={
+                    "steps": len(plan.steps),
+                    "schema_version": plan.schema_version,
+                    "requires_execution": plan.requires_execution,
+                },
             ),
         )
         task = self._transition(
@@ -162,12 +168,14 @@ class OrchestratorService:
 
             # Freeze the approved plan snapshot used for implementation.
             approved_plan = task.plan.model_copy(deep=True)
-            plan_json = approved_plan.model_dump_json()
-            plan_sha256 = hashlib.sha256(plan_json.encode("utf-8")).hexdigest()
+            plan_digest = compute_approval_digest(
+                plan=approved_plan,
+                validation_profile=task.validation_profile,
+            )
             self.workspace.write_text(
                 task_id, "plan.json", approved_plan.model_dump_json(indent=2)
             )
-            self.workspace.write_text(task_id, "plan.approved.sha256", plan_sha256)
+            self.workspace.write_text(task_id, "plan.approved.sha256", plan_digest)
 
             task = task.model_copy(
                 update={"plan_approved": True, "plan": approved_plan}
@@ -179,12 +187,15 @@ class OrchestratorService:
                     event_type="plan.approved",
                     from_lifecycle="awaiting_plan_approval",
                     to_lifecycle="generating",
-                    metadata={"plan_sha256": plan_sha256},
+                    metadata={
+                        "plan_sha256": plan_digest,
+                        "validation_profile": task.validation_profile,
+                    },
                 ),
             )
             task = self._transition(task, "generating", event_type="generation.started")
             self.store.save(task)
-            return self._run_implementation(task, plan_sha256=plan_sha256)
+            return self._run_implementation(task, plan_digest=plan_digest)
         finally:
             lock.release()
 
@@ -259,28 +270,31 @@ class OrchestratorService:
                 event_type="execution.completed",
             )
 
-    def _run_implementation(self, task: Task, *, plan_sha256: str) -> Task:
+    def _run_implementation(self, task: Task, *, plan_digest: str) -> Task:
         if task.plan is None:
             return self._fail(
                 task,
                 error="Approved plan missing at implementation time",
                 category="plan_missing",
             )
-        current_hash = hashlib.sha256(
-            task.plan.model_dump_json().encode("utf-8")
-        ).hexdigest()
-        if current_hash != plan_sha256:
+        current_digest = compute_approval_digest(
+            plan=task.plan,
+            validation_profile=task.validation_profile,
+        )
+        if current_digest != plan_digest:
             return self._fail(
                 task,
                 error="Approved plan integrity check failed",
                 category="plan_integrity",
             )
 
-        # Pass the exact approved plan to the implementer (bounded JSON envelope).
+        # Pass the exact approved canonical plan to the implementer.
+        plan_json = canonical_plan_json(task.plan)
         implementer_instruction = (
             f"{task.instruction}\n\n"
-            f"[APPROVED_PLAN sha256={plan_sha256}]\n"
-            f"{task.plan.model_dump_json()}\n"
+            f"[APPROVED_PLAN digest={plan_digest} "
+            f"profile={task.validation_profile}]\n"
+            f"{plan_json}\n"
             f"[/APPROVED_PLAN]\n"
         )
         try:
@@ -290,6 +304,7 @@ class OrchestratorService:
                 instruction=implementer_instruction,
                 workspace=self.workspace,
                 role="implementer",
+                validation_profile=task.validation_profile,
             )
         except AgentError as exc:
             return self._fail(task, error=exc.public_message, category="agent_error")

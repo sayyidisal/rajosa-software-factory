@@ -17,6 +17,20 @@ SUPPORTED_PROFILES: tuple[str, ...] = (
     "python_test_execution",
 )
 
+# Profiles that require verified isolated runtime tests before lifecycle=completed.
+# Single source of truth — orchestration and plan validation must use this set.
+RUNTIME_REQUIRED_PROFILES: frozenset[str] = frozenset({"python_test_execution"})
+
+
+def is_supported_profile(validation_profile: str) -> bool:
+    return validation_profile in SUPPORTED_PROFILES
+
+
+def profile_requires_runtime(validation_profile: str) -> bool:
+    """True when the trusted profile requires ExecutionService success to complete."""
+    return validation_profile in RUNTIME_REQUIRED_PROFILES
+
+
 # Extra product object fields are intentionally allowed for forward compatibility.
 # Required fields and types are still enforced.
 PRODUCT_EXTRA_FIELDS_POLICY = "allow"

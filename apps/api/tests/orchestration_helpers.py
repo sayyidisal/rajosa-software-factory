@@ -1,4 +1,4 @@
-"""Shared helpers for Phase 4B orchestration tests."""
+"""Shared helpers for Phase 4B/4C orchestration tests."""
 
 from __future__ import annotations
 
@@ -7,33 +7,38 @@ import json
 from fastapi.testclient import TestClient
 
 from app.agents.base import AgentRole, WorkspaceWriter
+from app.agents.mock import build_mock_plan
 from app.domain.models import AgentResult
 
-DEFAULT_PLAN = {
-    "schema_version": "1",
-    "summary": "Produce the requested artifact for the task.",
-    "goals": ["Satisfy the validation profile", "Keep the change small"],
-    "steps": [
-        {
-            "step_id": "implement",
-            "description": "Generate the primary result artifact.",
-            "expected_artifacts": ["result.txt"],
-            "acceptance_checks": ["Artifact present", "Quality gate passes"],
-        }
-    ],
-    "acceptance_checks": ["Deterministic quality gate passes"],
-    "requires_execution": False,
-}
+
+def make_plan_v2(*, requires_execution: bool = False) -> dict:
+    return build_mock_plan(
+        validation_profile=(
+            "python_test_execution" if requires_execution else "generic_text"
+        )
+    )
+
+
+DEFAULT_PLAN = make_plan_v2(requires_execution=False)
+DEFAULT_RUNTIME_PLAN = make_plan_v2(requires_execution=True)
 
 
 class FixedOutputAdapter:
-    """Returns a valid plan for planner; fixed content for implementer."""
+    """Returns a valid Plan v2 for planner; fixed content for implementer."""
 
-    def __init__(self, content: str, artifact_name: str = "result.txt") -> None:
+    def __init__(
+        self,
+        content: str,
+        artifact_name: str = "result.txt",
+        *,
+        plan: dict | None = None,
+    ) -> None:
         self.content = content
         self.artifact_name = artifact_name
+        self.plan = plan
         self.calls = 0
         self.roles: list[str] = []
+        self.last_validation_profile: str | None = None
 
     def run(
         self,
@@ -43,11 +48,16 @@ class FixedOutputAdapter:
         instruction: str,
         workspace: WorkspaceWriter,
         role: AgentRole = "implementer",
+        validation_profile: str = "generic_text",
     ) -> AgentResult:
         self.calls += 1
         self.roles.append(role)
+        self.last_validation_profile = validation_profile
         if role == "planner":
-            content = json.dumps(DEFAULT_PLAN, indent=2)
+            payload = self.plan
+            if payload is None:
+                payload = build_mock_plan(validation_profile=validation_profile)
+            content = json.dumps(payload, indent=2)
             workspace.write_text(task_id, "plan.json", content)
             return AgentResult(output=content, artifact_name="plan.json")
         workspace.write_text(task_id, self.artifact_name, self.content)
