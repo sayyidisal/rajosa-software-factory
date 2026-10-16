@@ -27,10 +27,13 @@ def main(argv: list[str] | None = None) -> None:
 
     settings = get_settings()
     # reload=True ⇒ Uvicorn ignores a workers count; we never pass workers.
+    # factory=True ⇒ import create_app without constructing the app (or SQLite)
+    # until the worker process starts — keeps ``import app.main`` side-effect free.
     import uvicorn
 
     uvicorn.run(
-        "app.main:app",
+        "app.main:create_app",
+        factory=True,
         host=settings.api_host,
         port=settings.api_port,
         reload=True,

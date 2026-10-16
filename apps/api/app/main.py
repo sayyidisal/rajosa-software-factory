@@ -185,4 +185,16 @@ def create_app(
     return app
 
 
-app = create_app()
+# Lazy ASGI attribute for ``uvicorn app.main:app`` (no import-time DB open).
+# Preferred supported launcher uses the factory: ``uvicorn app.main:create_app --factory``.
+_lazy_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> FastAPI:
+    """PEP 562: resolve ``app`` only when accessed, not on module import."""
+    if name == "app":
+        global _lazy_app
+        if _lazy_app is None:
+            _lazy_app = create_app()
+        return _lazy_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

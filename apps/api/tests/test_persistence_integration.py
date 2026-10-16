@@ -274,6 +274,7 @@ def test_execute_confirm_and_runner_defaults(tmp_path: Path, monkeypatch) -> Non
     from app.execution.disabled import DisabledExecutionRunner
     from app.config import get_settings
 
+    # Explicit environ dict + suite ENV_FILE stub: do not read apps/api/.env.
     monkeypatch.delenv("EXECUTION_RUNNER", raising=False)
     settings = get_settings(environ={"EXECUTION_RUNNER": "off"})
     assert settings.execution_runner == "off"
@@ -375,6 +376,8 @@ def test_memory_store_injection_still_works(tmp_path: Path) -> None:
 def test_default_settings_task_db_path(monkeypatch, tmp_path: Path) -> None:
     from app.config import API_ROOT, get_settings
 
+    # Empty environ + missing ENV_FILE (suite autouse): formula default only.
+    # Does not open the database file.
     monkeypatch.delenv("TASK_DB_PATH", raising=False)
     settings = get_settings(environ={})
     assert settings.task_db_path == API_ROOT / "var" / "rajosa.sqlite3"

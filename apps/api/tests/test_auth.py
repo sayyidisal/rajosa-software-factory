@@ -43,6 +43,20 @@ def _app(workspace_root: Path) -> TestClient:
     return TestClient(app)
 
 
+def _stub_disposable_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    name: str,
+    body: str = "# disposable; no RAJOSA_API_TOKEN\n",
+) -> Path:
+    """Point ``ENV_FILE_PATH`` at a disposable file (never the real apps/api/.env)."""
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    monkeypatch.setattr("app.config.ENV_FILE_PATH", path)
+    return path
+
+
 @pytest.mark.parametrize(("method", "path", "body"), PROTECTED_PATHS)
 def test_missing_authorization_returns_401(
     workspace_root: Path,
@@ -82,12 +96,29 @@ def test_wrong_token_returns_401(
 
 def test_unconfigured_token_fail_closed(
     workspace_root: Path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     auth_header_inject: dict[str, bool],
 ) -> None:
+    # Isolate from apps/api/.env so a local token cannot reappear via load_env_file.
+    # Sibling poison file proves we do not accidentally load an alternate env with a token.
+    poison_env = tmp_path / "would-poison-if-loaded.env"
+    poison_env.write_text(
+        f"RAJOSA_API_TOKEN={TEST_API_TOKEN}\n",
+        encoding="utf-8",
+    )
+    disposable_env = _stub_disposable_env_file(
+        monkeypatch,
+        tmp_path,
+        name="auth-unconfigured.env",
+    )
     monkeypatch.delenv("RAJOSA_API_TOKEN", raising=False)
     auth_header_inject["enabled"] = False
     client = _app(workspace_root)
+    from app import config as app_config
+
+    assert app_config.ENV_FILE_PATH == disposable_env
+    assert app_config.ENV_FILE_PATH != poison_env
     response = client.post(
         "/tasks",
         json={"title": "T", "instruction": "I"},
@@ -99,12 +130,29 @@ def test_unconfigured_token_fail_closed(
 
 def test_short_token_treated_as_unconfigured(
     workspace_root: Path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     auth_header_inject: dict[str, bool],
 ) -> None:
+    # Same ENV_FILE isolation as unconfigured: a long token in a sibling file
+    # must not be loaded when ENV_FILE_PATH points at the disposable stub.
+    poison_env = tmp_path / "would-poison-if-loaded.env"
+    poison_env.write_text(
+        f"RAJOSA_API_TOKEN={TEST_API_TOKEN}\n",
+        encoding="utf-8",
+    )
+    disposable_env = _stub_disposable_env_file(
+        monkeypatch,
+        tmp_path,
+        name="auth-short-token.env",
+    )
     monkeypatch.setenv("RAJOSA_API_TOKEN", "tooshort")
     auth_header_inject["enabled"] = False
     client = _app(workspace_root)
+    from app import config as app_config
+
+    assert app_config.ENV_FILE_PATH == disposable_env
+    assert app_config.ENV_FILE_PATH != poison_env
     response = client.post(
         "/tasks",
         json={"title": "T", "instruction": "I"},

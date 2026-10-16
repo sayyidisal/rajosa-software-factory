@@ -4,8 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.mock import MockAgentAdapter
+from app.config import API_ROOT
 from app.domain.store import MemoryTaskStore
 from app.main import create_app
+from app.persistence.sqlite import SqliteTaskRepository
 from app.quality.basic import BasicQualityGate
 from app.workspaces.local import LocalWorkspace
 
@@ -14,6 +16,42 @@ TEST_API_TOKEN = "test-rajosa-api-token-0001"
 
 # Autouse TestClient header injection; auth-negative tests set enabled=False.
 _AUTH_HEADER_INJECT = {"enabled": True}
+
+# Resolved once: refuse any SqliteTaskRepository open of the live app DB.
+ACTIVE_TASK_DB_PATH = (API_ROOT / "var" / "rajosa.sqlite3").resolve()
+
+# Process-wide guard (collection + execution). Autouse monkeypatch alone only
+# covers the test call phase, not import/collection side effects.
+_ORIGINAL_SQLITE_INIT = SqliteTaskRepository.__init__
+
+
+def _guarded_sqlite_repository_init(self, db_path):  # type: ignore[no-untyped-def]
+    resolved = Path(db_path).expanduser().resolve()
+    if resolved == ACTIVE_TASK_DB_PATH:
+        raise RuntimeError(
+            "test isolation: refused opening active task DB "
+            f"{ACTIVE_TASK_DB_PATH}"
+        )
+    return _ORIGINAL_SQLITE_INIT(self, db_path)
+
+
+SqliteTaskRepository.__init__ = _guarded_sqlite_repository_init  # type: ignore[method-assign]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_developer_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    """Point ``ENV_FILE_PATH`` at a disposable missing file for each test.
+
+    Prevents ``get_settings()`` / ``create_app()`` from loading ``apps/api/.env``.
+    Tests that intentionally exercise ``load_env_file`` pass an explicit path;
+    tests that need a custom env file may override ``ENV_FILE_PATH`` again.
+    """
+    isolated = tmp_path / "pytest-no-developer.env"
+    monkeypatch.setattr("app.config.ENV_FILE_PATH", isolated)
+    return isolated
 
 
 @pytest.fixture(autouse=True)
