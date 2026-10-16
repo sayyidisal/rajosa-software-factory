@@ -9,7 +9,7 @@ import uuid
 from app.agents.base import AgentAdapter
 from app.agents.errors import AgentError
 from app.domain.models import CheckResult, QualityReport, Task
-from app.domain.store import MemoryTaskStore
+from app.domain.store import TaskRepository
 from app.execution.models import ExecutionSummary
 from app.orchestration.events import OrchestrationEvent, make_event
 from app.orchestration.lifecycle import (
@@ -44,7 +44,7 @@ class OrchestratorService:
         adapter: AgentAdapter,
         gate: QualityGate,
         workspace: LocalWorkspace,
-        store: MemoryTaskStore,
+        store: TaskRepository,
     ) -> None:
         self.adapter = adapter
         self.gate = gate

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.domain.models import AgentResult, Task
-from app.domain.store import MemoryTaskStore
+from app.domain.store import TaskRepository
 from app.execution.base import ExecutionRunner
 from app.execution.concurrency import ExecutionGate
 from app.execution.limits import (
@@ -43,7 +43,7 @@ class ExecutionService:
         *,
         runner: ExecutionRunner,
         workspace: LocalWorkspace,
-        store: MemoryTaskStore,
+        store: TaskRepository,
         gate: QualityGate,
         gate_lock: ExecutionGate,
         staging_base: Path | None = None,

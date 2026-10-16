@@ -9,7 +9,7 @@ from app.agents.sumopod import SumoPodAgentAdapter
 from app.api.routes import health, tasks
 from app.config import get_settings
 from app.domain.service import TaskService
-from app.domain.store import MemoryTaskStore
+from app.domain.store import MemoryTaskStore, TaskRepository
 from app.execution.concurrency import GLOBAL_EXECUTION_GATE
 from app.execution.factory import build_execution_runner
 from app.execution.service import ExecutionService
@@ -33,7 +33,7 @@ def create_app(
     adapter=None,
     gate=None,
     workspace: LocalWorkspace | None = None,
-    store: MemoryTaskStore | None = None,
+    store: TaskRepository | None = None,
     execution_runner=None,
     execution_gate=None,
 ) -> FastAPI:
