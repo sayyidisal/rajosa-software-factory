@@ -17,6 +17,7 @@ from app.execution.factory import build_execution_runner
 from app.execution.service import ExecutionService
 from app.orchestration.recovery import recover_interrupted_tasks
 from app.orchestration.service import OrchestratorService
+from app.orchestration.startup_diagnostics import build_startup_diagnostics
 from app.persistence.sqlite import SqliteTaskRepository
 from app.quality.basic import BasicQualityGate
 from app.workspaces.local import LocalWorkspace
@@ -103,6 +104,11 @@ def create_app(
                     len(recon.digest_mirror_issues),
                     len(recon.skipped_unsafe),
                 )
+            app.state.startup_diagnostics = build_startup_diagnostics(
+                recovery_completed=True,
+                recovery_report=recovery_report,
+                reconciliation_report=recon,
+            )
 
         yield
 
@@ -151,6 +157,11 @@ def create_app(
     app.state.startup_recovery_completed = False
     app.state.startup_recovery_report = None
     app.state.reconciliation_report = None
+    app.state.startup_diagnostics = build_startup_diagnostics(
+        recovery_completed=False,
+        recovery_report=None,
+        reconciliation_report=None,
+    )
 
     logger.info(
         "agent adapter selected: %s (class=%s)",

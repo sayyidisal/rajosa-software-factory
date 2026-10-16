@@ -173,6 +173,28 @@ def test_sqlite_event_insert_failure_rolls_back_task(tmp_path: Path) -> None:
     repo.close()
 
 
+def test_sqlite_busy_timeout_configured(tmp_path: Path) -> None:
+    from app.persistence.sqlite import SQLITE_BUSY_TIMEOUT_MS
+
+    repo = _repo(tmp_path)
+    row = repo._conn.execute("PRAGMA busy_timeout").fetchone()
+    assert row is not None
+    assert int(row[0]) == SQLITE_BUSY_TIMEOUT_MS
+    assert SQLITE_BUSY_TIMEOUT_MS == 5_000
+    repo.close()
+
+
+def test_sqlite_list_by_lifecycle_stable_order(tmp_path: Path) -> None:
+    """Insert out of order; listing must return id ASC for the same lifecycle."""
+    repo = _repo(tmp_path)
+    repo.save(_task(task_id="z-id", lifecycle="planning"))
+    repo.save(_task(task_id="a-id", lifecycle="planning"))
+    repo.save(_task(task_id="m-id", lifecycle="planning"))
+    listed = repo.list_by_lifecycle(["planning"])
+    assert [t.id for t in listed] == ["a-id", "m-id", "z-id"]
+    repo.close()
+
+
 def test_sqlite_list_by_lifecycle_and_ids(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     repo.save(_task(task_id="z", lifecycle="awaiting_plan_approval"))
@@ -182,6 +204,9 @@ def test_sqlite_list_by_lifecycle_and_ids(tmp_path: Path) -> None:
         "a",
         "m",
     }
+    # Stable order by id among mixed terminals.
+    ordered = repo.list_by_lifecycle(["completed", "failed"])
+    assert [t.id for t in ordered] == ["a", "m"]
     assert repo.list_task_ids() == ["a", "m", "z"]
     repo.close()
 

@@ -85,11 +85,11 @@ Orchestrator deterministik + approval rencana wajib: [agent-orchestration-design
 
 Kontrak rencana `schema_version: "2"`, JSON ketat, dan digest approval (plan + profile): [phase-4c-design.md](./phase-4c-design.md).
 
-## Persistensi (Phase 4E.1–4E.3)
+## Persistensi (Phase 4E.1–4E.4)
 
-SQLite task repository + wiring aplikasi: migrasi wajib saat open; failure migrasi menggagalkan startup; koneksi ditutup pada shutdown untuk store yang dimiliki aplikasi. Integrity approval (re-validate plan + profile + digest) pada get/approve/execute bersifat fail-closed tanpa auto-repair.
+SQLite task repository + wiring aplikasi: migrasi wajib saat open; failure migrasi menggagalkan startup; koneksi ditutup pada shutdown untuk store yang dimiliki aplikasi. Integrity approval (re-validate plan + profile + digest) pada get/approve/execute bersifat fail-closed tanpa auto-repair. `PRAGMA busy_timeout` (5s) mengurangi gagal langsung saat kontensi singkat; **bukan** jaminan multi-worker.
 
-Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap.
+Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). `list_by_lifecycle` diurutkan `id ASC`. Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap. `GET /health` menyertakan ringkasan `startup` (counts/flags/task ids saja; tanpa path absolut atau pesan error mentah).
 
 ## Keputusan yang ditunda
 

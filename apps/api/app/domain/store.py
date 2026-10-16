@@ -108,7 +108,9 @@ class MemoryTaskStore:
 
     def list_by_lifecycle(self, lifecycles: Sequence[Lifecycle]) -> list[Task]:
         allowed = frozenset(lifecycles)
-        return [task for task in self._tasks.values() if task.lifecycle in allowed]
+        matched = [task for task in self._tasks.values() if task.lifecycle in allowed]
+        # Match SqliteTaskRepository: stable order by task id.
+        return sorted(matched, key=lambda task: task.id)
 
     def list_task_ids(self) -> list[str]:
         return sorted(self._tasks.keys())

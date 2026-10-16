@@ -9,3 +9,7 @@ def test_health(client: TestClient) -> None:
     assert body["service"] == "rajosa-api"
     assert body["adapter"] == "mock"
     assert body["execution_runner"] == "off"
+    # Injected Memory store: recovery does not run at lifespan.
+    assert body["startup"]["recovery_completed"] is False
+    assert body["startup"]["recovery"] is None
+    assert body["startup"]["reconciliation"] is None

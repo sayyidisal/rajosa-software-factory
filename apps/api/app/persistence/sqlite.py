@@ -1,6 +1,8 @@
 """SQLite-backed TaskRepository (Phase 4E).
 
 Single-process only: one application process per database file.
+``SQLITE_BUSY_TIMEOUT_MS`` only reduces immediate SQLITE_BUSY under brief
+contention; it does **not** make multi-worker task orchestration safe.
 """
 
 from __future__ import annotations
@@ -19,6 +21,10 @@ from app.orchestration.events import OrchestrationEvent
 from app.orchestration.lifecycle import Lifecycle
 from app.orchestration.plan import Plan
 from app.persistence.migrate import apply_migrations
+
+# Conservative wait when the DB file is briefly locked. Default SQLite timeout
+# is 0 ms (fail immediately). This is not a multi-process coordination strategy.
+SQLITE_BUSY_TIMEOUT_MS = 5_000
 
 
 def _utc_now() -> str:
@@ -39,6 +45,7 @@ class SqliteTaskRepository:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute(f"PRAGMA busy_timeout = {int(SQLITE_BUSY_TIMEOUT_MS)}")
         apply_migrations(self._conn)
 
     def close(self) -> None:
@@ -179,13 +186,19 @@ class SqliteTaskRepository:
             return task.model_copy(update={"events": merged_events})
 
     def list_by_lifecycle(self, lifecycles: Sequence[Lifecycle]) -> list[Task]:
+        """Return matching tasks ordered by ``id`` ASC (stable for recovery).
+
+        Task ``id`` is the primary key (canonical UUID string). Lexicographic
+        order is deterministic across restarts and matches ``list_task_ids``.
+        """
         allowed = list(lifecycles)
         if not allowed:
             return []
         placeholders = ",".join("?" for _ in allowed)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT * FROM tasks WHERE lifecycle IN ({placeholders})",
+                f"SELECT * FROM tasks WHERE lifecycle IN ({placeholders}) "
+                "ORDER BY id ASC",
                 allowed,
             ).fetchall()
             return [
