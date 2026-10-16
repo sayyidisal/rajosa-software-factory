@@ -244,7 +244,9 @@ def test_execute_before_plan_approval_rejected(workspace_root: Path) -> None:
         f"/tasks/{created['id']}/execute-tests",
         json={"confirm": True},
     )
-    assert response.status_code == 422
+    # Fail-closed integrity: unapproved plan is not executable (409, not 422).
+    assert response.status_code == 409
+    assert "integrity" in response.json()["detail"].lower()
     assert runner.calls == []
 
 

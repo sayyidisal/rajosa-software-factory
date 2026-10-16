@@ -21,6 +21,9 @@ class Settings:
     api_port: int
     cors_origins: list[str]
     workspace_root: Path
+    # SQLite task DB path (Phase 4E). Default under API_ROOT/var, outside workspaces.
+    # Single-process only — do not run multiple uvicorn workers against one file.
+    task_db_path: Path
     agent_adapter: str
     sumopod_api_key: str | None
     sumopod_base_url: str
@@ -73,6 +76,11 @@ def get_settings(*, environ: dict[str, str] | None = None) -> Settings:
     if not workspace_root.is_absolute():
         workspace_root = API_ROOT / workspace_root
 
+    db_value = env.get("TASK_DB_PATH", "var/rajosa.sqlite3")
+    task_db_path = Path(db_value).expanduser()
+    if not task_db_path.is_absolute():
+        task_db_path = API_ROOT / task_db_path
+
     raw_origins = env.get("CORS_ORIGINS")
     if raw_origins is None:
         cors_origins = list(DEFAULT_CORS_ORIGINS)
@@ -87,6 +95,7 @@ def get_settings(*, environ: dict[str, str] | None = None) -> Settings:
         api_port=int(env.get("API_PORT", "8000")),
         cors_origins=cors_origins,
         workspace_root=workspace_root,
+        task_db_path=task_db_path,
         agent_adapter=env.get("AGENT_ADAPTER", "mock").strip() or "mock",
         sumopod_api_key=sumopod_api_key,
         sumopod_base_url=env.get("SUMOPOD_BASE_URL", DEFAULT_SUMOPOD_BASE_URL).rstrip("/"),

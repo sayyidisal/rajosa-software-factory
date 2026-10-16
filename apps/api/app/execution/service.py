@@ -7,10 +7,16 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.domain.models import AgentResult, Task
 from app.domain.store import TaskRepository
 from app.execution.base import ExecutionRunner
 from app.execution.concurrency import ExecutionGate
+from app.orchestration.integrity import (
+    PlanIntegrityError,
+    assert_approved_plan_integrity,
+)
 from app.execution.limits import (
     APPROVED_RUNTIME_ID,
     APPROVED_TEST_PROFILE,
@@ -68,9 +74,18 @@ class ExecutionService:
         if confirm is not True:
             raise ValueError("explicit confirmation is required")
 
-        task = self.store.get(task_id)
+        try:
+            task = self.store.get(task_id)
+        except ValidationError as exc:
+            raise PlanIntegrityError(
+                "invalid_stored_task",
+                "Stored task data failed schema validation",
+            ) from exc
         if task is None:
             raise LookupError("task not found")
+
+        # Approved plan + digest must still verify; never trust DB flags alone.
+        assert_approved_plan_integrity(task)
 
         execution_id = str(uuid.uuid4())
         limits = clamp_limits(

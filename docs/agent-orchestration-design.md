@@ -203,7 +203,7 @@ curl -s http://127.0.0.1:8000/tasks/<id>/execute-tests \
 | 4B Minimal orchestrator + mandatory plan approval | **Done** |
 | 4C Structured plan v2 + strict validation | **Done** — see [phase-4c-design.md](./phase-4c-design.md) |
 | 4D Artifact provenance / optional reviewer | Not started |
-| 4E SQLite persistence | Not started |
+| 4E SQLite persistence | **4E.0–4E.2 done** (protocol + SQLite core + app wiring/integrity); recovery/auto-resume deferred |
 | 4F Bounded retry + evaluation harness | Not started |
 
 ---

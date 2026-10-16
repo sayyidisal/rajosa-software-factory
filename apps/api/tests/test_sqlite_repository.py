@@ -72,8 +72,15 @@ def test_sqlite_round_trip_task_and_events(tmp_path: Path) -> None:
         error_category=None,
         metadata={"steps": 1},
     )
+    from app.orchestration.plan import compute_approval_digest
+
+    digest = compute_approval_digest(plan=plan, validation_profile="generic_text")
     task = _task(plan=plan, plan_approved=True).model_copy(
-        update={"output": "plan-json", "quality": QualityReport(passed=True, checks=[])}
+        update={
+            "output": "plan-json",
+            "quality": QualityReport(passed=True, checks=[]),
+            "approval_digest": digest,
+        }
     )
     saved = repo.save(task, new_events=[e1, e2])
     assert len(saved.events) == 2
@@ -84,6 +91,7 @@ def test_sqlite_round_trip_task_and_events(tmp_path: Path) -> None:
     assert loaded.plan is not None
     assert loaded.plan.schema_version == "2"
     assert loaded.plan_approved is True
+    assert loaded.approval_digest == digest
     assert loaded.quality.passed is True
     assert loaded.execution is not None
     assert loaded.execution.status == "not_requested"
@@ -92,13 +100,12 @@ def test_sqlite_round_trip_task_and_events(tmp_path: Path) -> None:
     assert loaded.events[0].from_lifecycle == "created"
     assert loaded.events[1].metadata["steps"] == 1
 
-    # approval_digest column populated when approved
     row = repo._conn.execute(
         "SELECT approval_digest, workspace_relpath FROM tasks WHERE id = ?",
         ("t1",),
     ).fetchone()
     assert row["workspace_relpath"] == "t1"
-    assert row["approval_digest"] and len(row["approval_digest"]) == 64
+    assert row["approval_digest"] == digest
     repo.close()
 
 

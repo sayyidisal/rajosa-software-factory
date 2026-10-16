@@ -8,6 +8,8 @@ __pycache__/
 .venv/
 apps/api/.venv/
 apps/api/var/
+*.sqlite3
+*.sqlite3-*
 .env
 .env.local
 .DS_Store

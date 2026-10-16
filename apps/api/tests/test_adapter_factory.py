@@ -14,6 +14,7 @@ def _settings(agent_adapter: str, *, api_key: str | None = None) -> Settings:
         api_port=8000,
         cors_origins=["http://127.0.0.1:3000"],
         workspace_root=Path("/tmp/unused"),
+        task_db_path=Path("/tmp/unused-tasks.sqlite3"),
         agent_adapter=agent_adapter,
         sumopod_api_key=api_key,
         sumopod_base_url="https://ai.sumopod.com/v1",

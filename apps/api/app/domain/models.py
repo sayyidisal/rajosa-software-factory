@@ -48,7 +48,10 @@ class Task(BaseModel):
     id: str
     title: str
     instruction: str
-    validation_profile: ValidationProfileName = "generic_text"
+    # Loaded as str so corrupt/unsupported DB values fail closed in integrity
+    # checks (HTTP 409) instead of exploding at Pydantic deserialize time.
+    # Create API still constrains to ValidationProfileName via TaskCreate.
+    validation_profile: str = "generic_text"
     # Legacy compatibility: passed/failed for terminal outcomes; pending otherwise.
     status: Literal["passed", "failed", "pending"]
     lifecycle: Lifecycle = "created"
@@ -58,4 +61,7 @@ class Task(BaseModel):
     execution: ExecutionSummary | None = None
     plan: Plan | None = None
     plan_approved: bool = False
+    # SHA-256 hex from compute_approval_digest at approval time. Evidence only —
+    # must be recomputed and compared before privileged operations (Phase 4E.2).
+    approval_digest: str | None = None
     events: list[OrchestrationEvent] = Field(default_factory=list)

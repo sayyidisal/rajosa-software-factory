@@ -1,4 +1,7 @@
-"""SQLite-backed TaskRepository (Phase 4E.1) — not wired into create_app yet."""
+"""SQLite-backed TaskRepository (Phase 4E).
+
+Single-process only: one application process per database file.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from app.domain.store import _append_new_events
 from app.execution.models import ExecutionSummary
 from app.orchestration.events import OrchestrationEvent
 from app.orchestration.lifecycle import Lifecycle
-from app.orchestration.plan import Plan, compute_approval_digest
+from app.orchestration.plan import Plan
 from app.persistence.migrate import apply_migrations
 
 
@@ -84,7 +87,8 @@ class SqliteTaskRepository:
 
                 now = _utc_now()
                 created_at = existing["created_at"] if existing is not None else now
-                approval_digest = self._approval_digest_for(task)
+                # Persist digest as stored on the task — never recompute-to-fix.
+                approval_digest = task.approval_digest
                 plan_json = (
                     task.plan.model_dump_json() if task.plan is not None else None
                 )
@@ -247,14 +251,6 @@ class SqliteTaskRepository:
             execution=execution,
             plan=plan,
             plan_approved=bool(row["plan_approved"]),
+            approval_digest=row["approval_digest"],
             events=events,
-        )
-
-    @staticmethod
-    def _approval_digest_for(task: Task) -> str | None:
-        if not task.plan_approved or task.plan is None:
-            return None
-        return compute_approval_digest(
-            plan=task.plan,
-            validation_profile=task.validation_profile,
         )

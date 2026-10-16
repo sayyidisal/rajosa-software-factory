@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.domain.models import PlanDecisionBody, Task, TaskCreate
 from app.execution.concurrency import ExecutionBusyError
 from app.execution.models import ExecuteTestsBody
+from app.orchestration.integrity import PlanIntegrityError
 from app.orchestration.service import OrchestrationConflict
 
 router = APIRouter()
@@ -25,7 +26,13 @@ def create_task(payload: TaskCreate, request: Request) -> Task:
 @router.get("/tasks/{task_id}", response_model=Task)
 def get_task(task_id: str, request: Request) -> Task:
     service = request.app.state.task_service
-    task = service.get_task(task_id)
+    try:
+        task = service.get_task(task_id)
+    except PlanIntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan integrity check failed: {exc}",
+        ) from None
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
@@ -51,6 +58,11 @@ def approve_plan(
         raise ValueError("explicit plan approval decision is required")
     except LookupError:
         raise HTTPException(status_code=404, detail="Task not found") from None
+    except PlanIntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan integrity check failed: {exc}",
+        ) from None
     except OrchestrationConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
@@ -80,6 +92,11 @@ def execute_tests(
         )
     except LookupError:
         raise HTTPException(status_code=404, detail="Task not found") from None
+    except PlanIntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan integrity check failed: {exc}",
+        ) from None
     except ExecutionBusyError as exc:
         raise HTTPException(
             status_code=409,

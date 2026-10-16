@@ -42,6 +42,7 @@ def make_settings(**overrides) -> Settings:
         "api_port": 8000,
         "cors_origins": ["http://127.0.0.1:3000"],
         "workspace_root": Path("/tmp/unused"),
+        "task_db_path": Path("/tmp/unused-tasks.sqlite3"),
         "agent_adapter": "sumopod",
         "sumopod_api_key": SECRET_KEY,
         "sumopod_base_url": "https://ai.sumopod.com/v1",

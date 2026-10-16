@@ -6,6 +6,8 @@ import logging
 import threading
 import uuid
 
+from pydantic import ValidationError
+
 from app.agents.base import AgentAdapter
 from app.agents.errors import AgentError
 from app.domain.models import CheckResult, QualityReport, Task
@@ -18,6 +20,11 @@ from app.orchestration.lifecycle import (
     legacy_status_for,
 )
 from app.quality.profiles import profile_requires_runtime
+from app.orchestration.integrity import (
+    PlanIntegrityError,
+    assert_approved_plan_integrity,
+    assert_plan_approvable,
+)
 from app.orchestration.plan import (
     PlanValidationError,
     canonical_plan_json,
@@ -59,8 +66,24 @@ class OrchestratorService:
                 self._locks[task_id] = threading.Lock()
             return self._locks[task_id]
 
+    def _load_task(self, task_id: str) -> Task | None:
+        """Load task from store; corrupt persisted rows become PlanIntegrityError."""
+        try:
+            return self.store.get(task_id)
+        except ValidationError as exc:
+            raise PlanIntegrityError(
+                "invalid_stored_task",
+                "Stored task data failed schema validation",
+            ) from exc
+
     def get_task(self, task_id: str) -> Task | None:
-        return self.store.get(task_id)
+        task = self._load_task(task_id)
+        if task is None:
+            return None
+        if task.plan_approved:
+            # Fail-closed for approved tasks: digest/plan/profile must still verify.
+            assert_approved_plan_integrity(task)
+        return task
 
     def create_task(
         self,
@@ -156,7 +179,7 @@ class OrchestratorService:
         if not lock.acquire(blocking=False):
             raise OrchestrationConflict("another plan approval is already in progress")
         try:
-            task = self.store.get(task_id)
+            task = self._load_task(task_id)
             if task is None:
                 raise LookupError("task not found")
             if task.lifecycle != "awaiting_plan_approval":
@@ -166,8 +189,8 @@ class OrchestratorService:
             if task.plan_approved or task.plan is None:
                 raise OrchestrationConflict("plan is already approved or missing")
 
-            # Freeze the approved plan snapshot used for implementation.
-            approved_plan = task.plan.model_copy(deep=True)
+            # Re-validate plan+profile before approval (no digest yet).
+            approved_plan = assert_plan_approvable(task).model_copy(deep=True)
             plan_digest = compute_approval_digest(
                 plan=approved_plan,
                 validation_profile=task.validation_profile,
@@ -178,7 +201,11 @@ class OrchestratorService:
             self.workspace.write_text(task_id, "plan.approved.sha256", plan_digest)
 
             task = task.model_copy(
-                update={"plan_approved": True, "plan": approved_plan}
+                update={
+                    "plan_approved": True,
+                    "plan": approved_plan,
+                    "approval_digest": plan_digest,
+                }
             )
             task = self._append_event(
                 task,
@@ -202,7 +229,7 @@ class OrchestratorService:
     def reject_plan(self, task_id: str) -> Task:
         lock = self._lock_for(task_id)
         with lock:
-            task = self.store.get(task_id)
+            task = self._load_task(task_id)
             if task is None:
                 raise LookupError("task not found")
             if task.lifecycle != "awaiting_plan_approval":
