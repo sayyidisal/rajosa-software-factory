@@ -9,6 +9,11 @@ router = APIRouter()
 
 @router.get("/health")
 def health(request: Request) -> dict[str, Any]:
+    """Public liveness/diagnostics — intentionally unauthenticated.
+
+    Must stay redacted: counts/flags only; no task UUIDs, paths, or secrets.
+    Task data remains behind the bearer gate on ``/tasks*``.
+    """
     adapter = getattr(request.app.state, "agent_adapter", "unknown")
     execution_runner = getattr(request.app.state, "execution_runner", "off")
     diagnostics = getattr(request.app.state, "startup_diagnostics", None)

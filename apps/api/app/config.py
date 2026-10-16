@@ -32,6 +32,9 @@ class Settings:
     sumopod_max_output_chars: int
     execution_runner: str
     execution_image: str
+    # Shared API bearer token (Phase 4H.1). None/empty ⇒ fail-closed on task routes.
+    # Never log or expose this value. Not a multi-user identity system.
+    rajosa_api_token: str | None
 
 
 def load_env_file(path: Path = ENV_FILE_PATH, *, environ: dict[str, str] | None = None) -> int:
@@ -108,4 +111,9 @@ def get_settings(*, environ: dict[str, str] | None = None) -> Settings:
             "EXECUTION_IMAGE", "rajosa-exec-python:3.12-pytest"
         ).strip()
         or "rajosa-exec-python:3.12-pytest",
+        # Auth token: strip only; never default to a hardcoded secret.
+        # Short/blank values are treated as unset by app.auth.normalize_api_token.
+        rajosa_api_token=(
+            (env.get("RAJOSA_API_TOKEN") or "").strip() or None
+        ),
     )

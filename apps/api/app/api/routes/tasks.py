@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.auth import require_api_token
 from app.domain.models import PlanDecisionBody, Task, TaskCreate
 from app.execution.concurrency import ExecutionBusyError
 from app.execution.models import ExecuteTestsBody
 from app.orchestration.integrity import PlanIntegrityError
 from app.orchestration.service import OrchestrationConflict
 
-router = APIRouter()
+# All task data / mutation routes require a configured Bearer token (Phase 4H.1).
+router = APIRouter(dependencies=[Depends(require_api_token)])
 
 
 @router.post("/tasks", response_model=Task)

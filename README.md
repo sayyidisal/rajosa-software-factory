@@ -17,11 +17,17 @@ apps/api/.venv/bin/pip install -e "./apps/api[dev]"
 npm --prefix apps/web install
 ```
 
-Salin `apps/api/.env.example` ke `apps/api/.env` hanya jika Anda perlu mengganti nilai default. Jangan menyimpan API key di frontend atau variabel `NEXT_PUBLIC_*`.
+Salin `apps/api/.env.example` ke `apps/api/.env` dan `apps/web/.env.example` ke `apps/web/.env.local` saat konfigurasi lokal. **Wajib** set `RAJOSA_API_TOKEN` yang sama di keduanya (rahasia acak panjang). Jangan menyimpan token API, SumoPod key, atau rahasia lain di frontend bundle atau variabel `NEXT_PUBLIC_*`.
+
+Generate contoh token (jalankan lokal; jangan commit hasilnya):
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
 ## Mode mock (default)
 
-Default `AGENT_ADAPTER=mock`. Backend dapat dijalankan dan diuji tanpa API key serta tanpa akses jaringan provider.
+Default `AGENT_ADAPTER=mock`. Backend dapat dijalankan dan diuji tanpa SumoPod key serta tanpa akses jaringan provider. Token API (`RAJOSA_API_TOKEN`) tetap diperlukan agar rute `/tasks*` tidak fail-closed dengan HTTP 401.
 
 ```bash
 make dev-api
@@ -29,6 +35,8 @@ make dev-web
 ```
 
 `make dev-api` menjalankan **satu** proses API (`python -m app.run_dev`, Uvicorn `--reload`). Jangan menambah `--workers` atau mengatur `WEB_CONCURRENCY>1`. Beberapa worker/instance yang berbagi SQLite/workspace yang sama **tidak didukung**.
+
+UI memanggil `/backend/*`; Next.js menyuntikkan `Authorization: Bearer` di **server** dari `RAJOSA_API_TOKEN`. Rewrite mentah tanpa token **bukan** batas autentikasi — gate ada di FastAPI.
 
 API: `http://127.0.0.1:8000`  
 Web: `http://127.0.0.1:3000` (dan `http://localhost:3000`)
@@ -58,7 +66,12 @@ Tanpa baris `AGENT_ADAPTER=sumopod`, backend memakai mock (default) dan output a
 curl -s http://127.0.0.1:8000/health
 ```
 
-Harus memuat `"adapter":"sumopod"`. Jika masih `"mock"`, konfigurasi belum terbaca.
+Harus memuat `"adapter":"sumopod"`. Jika masih `"mock"`, konfigurasi belum terbaca. Rute task memerlukan header bearer:
+
+```bash
+curl -s -H "Authorization: Bearer $RAJOSA_API_TOKEN" \
+  http://127.0.0.1:8000/tasks/<task-id>
+```
 
 Jika `AGENT_ADAPTER=sumopod` tetapi `SUMOPOD_API_KEY` kosong, aplikasi tetap start dan task gagal dengan pesan konfigurasi yang aman — bukan output mock.
 
@@ -98,6 +111,7 @@ Alur:
 
 ```bash
 curl -s http://127.0.0.1:8000/tasks/<task-id>/execute-tests \
+  -H "Authorization: Bearer $RAJOSA_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"confirm":true}'
 ```
@@ -156,7 +170,9 @@ Saat startup (store yang dimiliki aplikasi): task di state interruptible (`creat
 
 Persistensi ini **bukan** jaminan exactly-once execution, keamanan multi-process/multi-worker terhadap satu file DB, atau pemulihan setiap side effect eksternal (artefak di disk, container, dsb.).
 
-**Topologi yang didukung:** tepat satu proses API per DB + workspace (`make dev-api`). Prefer `TASK_DB_PATH` / `WORKSPACE_ROOT` absolut. **Tidak didukung:** `uvicorn --workers N` (N>1), beberapa instance berbagi storage yang sama, paparan eksternal / multi-tenant tanpa kontrol tambahan. Guard pada entry point dev menolak `WEB_CONCURRENCY!=1` dan `--workers`≠1; memanggil Uvicorn mentah di luar `make dev-api` tetap bisa salah konfigurasi.
+**Topologi yang didukung:** tepat satu proses API per DB + workspace (`make dev-api`) dengan `RAJOSA_API_TOKEN` dikonfigurasi. Prefer `TASK_DB_PATH` / `WORKSPACE_ROOT` absolut. **Tidak didukung:** `uvicorn --workers N` (N>1), beberapa instance berbagi storage yang sama, paparan eksternal / multi-tenant tanpa kontrol tambahan. Loopback tidak menggantikan bearer auth. Guard pada entry point dev menolak `WEB_CONCURRENCY!=1` dan `--workers`≠1.
+
+**Rotasi token:** ganti `RAJOSA_API_TOKEN` di `.env` API dan `.env.local` web, restart `dev-api` + `dev-web`, buang nilai lama.
 
 Workspace memberikan path containment. Runner kontainer (jika diaktifkan) menambah containment terpisah untuk tes Python yang diotorisasi secara eksplisit — tetap bukan sandbox produksi. `EXECUTION_RUNNER` default `off`.
 

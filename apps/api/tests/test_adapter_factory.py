@@ -23,6 +23,7 @@ def _settings(agent_adapter: str, *, api_key: str | None = None) -> Settings:
         sumopod_max_output_chars=16000,
         execution_runner="off",
         execution_image="rajosa-exec-python:3.12-pytest",
+        rajosa_api_token="test-rajosa-api-token-0001",
     )
 
 

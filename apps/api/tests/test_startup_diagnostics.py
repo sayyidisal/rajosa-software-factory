@@ -58,7 +58,9 @@ def test_build_startup_diagnostics_excludes_paths_and_raw_errors() -> None:
     assert "secret" not in serialized
     assert payload["recovery_completed"] is True
     assert payload["recovery"]["interrupted_count"] == 2
-    assert payload["recovery"]["interrupted_task_ids"] == ["a-id", "b-id"]
+    assert "interrupted_task_ids" not in payload["recovery"]
+    assert "a-id" not in serialized
+    assert "b-id" not in serialized
     assert payload["reconciliation"]["incomplete"] is True
     assert payload["reconciliation"]["orphan_workspace_count"] == 2
     assert payload["reconciliation"]["missing_workspace_count"] == 1
@@ -112,10 +114,11 @@ def test_owned_health_includes_startup_counts(
         startup = body["startup"]
         assert startup["recovery_completed"] is True
         assert startup["recovery"]["interrupted_count"] == 1
-        assert tid in startup["recovery"]["interrupted_task_ids"]
+        assert "interrupted_task_ids" not in startup["recovery"]
         assert startup["reconciliation"]["incomplete"] is False
         assert startup["reconciliation"]["orphan_workspace_count"] == 1
         serialized = json.dumps(body)
         assert str(ws.resolve()) not in serialized
-        # Orphan directory names must not appear — only counts.
+        # Orphan directory names and task UUIDs must not appear — only counts.
         assert orphan not in serialized
+        assert tid not in serialized

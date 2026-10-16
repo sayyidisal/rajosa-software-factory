@@ -51,6 +51,7 @@ def make_settings(**overrides) -> Settings:
         "sumopod_max_output_chars": 100,
         "execution_runner": "off",
         "execution_image": "rajosa-exec-python:3.12-pytest",
+        "rajosa_api_token": "test-rajosa-api-token-0001",
     }
     values.update(overrides)
     return Settings(**values)

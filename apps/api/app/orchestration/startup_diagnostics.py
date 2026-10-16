@@ -21,11 +21,10 @@ def build_startup_diagnostics(
     """Build a JSON-serializable startup summary safe for ``GET /health``."""
     recovery: dict[str, Any] | None = None
     if recovery_report is not None:
-        # Sorted ids keep the payload deterministic; ids are UUIDs, not paths.
+        # Public /health: counts only — never task UUIDs (Phase 4H.1).
         recovery = {
             "examined": int(recovery_report.examined),
             "interrupted_count": len(recovery_report.interrupted_task_ids),
-            "interrupted_task_ids": sorted(recovery_report.interrupted_task_ids),
             "skipped_count": len(recovery_report.skipped_task_ids),
         }
 

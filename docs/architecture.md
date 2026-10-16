@@ -9,7 +9,7 @@ Aplikasi web Next.js meneruskan request same-origin di `/backend/*` ke FastAPI. 
 
 Model dipilih lewat environment agar dapat diganti tanpa mengubah kode. Ketersediaan dan harga model harus diverifikasi di dashboard SumoPod.
 
-Adapter dipilih saat aplikasi start dari `AGENT_ADAPTER` (default `mock`). Backend memuat `apps/api/.env` dari path absolut paket API tanpa menimpa variabel proses yang sudah ada. `GET /health` mengembalikan field `adapter` (`mock` atau `sumopod`) dan `execution_runner` tanpa membocorkan rahasia.
+Adapter dipilih saat aplikasi start dari `AGENT_ADAPTER` (default `mock`). Backend memuat `apps/api/.env` dari path absolut paket API tanpa menimpa variabel proses yang sudah ada. `GET /health` bersifat **publik** (tanpa bearer) dan hanya mengembalikan status/`adapter`/`execution_runner` plus ringkasan startup (counts/flags) — tanpa UUID task, path, atau kredensial. Rute `/tasks*` memerlukan `Authorization: Bearer` yang cocok dengan `RAJOSA_API_TOKEN` (fail-closed jika token belum dikonfigurasi).
 
 Jika `AGENT_ADAPTER=sumopod`, factory selalu menginstansiasi `SumoPodAgentAdapter` (tidak jatuh diam-diam ke mock). API key divalidasi saat task dijalankan, bukan saat start. Mode mock tidak membutuhkan kredensial.
 
@@ -77,7 +77,7 @@ API default mendengarkan `127.0.0.1`. Frontend development diikat ke localhost. 
 
 API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang sesuai. Paparan eksternal dan multi-tenant **bukan** topologi yang ditetapkan aman oleh fase ini.
 
-### Checklist deployment (Phase 4G.1)
+### Checklist deployment (Phase 4G.1 + 4H.1)
 
 - Satu proses API per `TASK_DB_PATH` + `WORKSPACE_ROOT`.
 - Jangan pakai `uvicorn --workers N` untuk N>1 terhadap DB yang sama.
@@ -85,6 +85,9 @@ API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang
 - Prefer path absolut untuk `TASK_DB_PATH` dan `WORKSPACE_ROOT`.
 - `EXECUTION_RUNNER` tetap `off` secara default.
 - Guard `make dev-api` menolak `WEB_CONCURRENCY!=1` / `--workers`≠1; **bukan** pencegah universal jika operator memanggil Uvicorn langsung di luar entry point itu.
+- Set `RAJOSA_API_TOKEN` (panjang, acak) pada API dan pada server Next.js (`apps/web`, **bukan** `NEXT_PUBLIC_*`). Proxy `/backend/*` menyuntikkan bearer di sisi server.
+- Loopback (`127.0.0.1`) **bukan** pengganti autentikasi. Paparan publik tetap tidak didukung tanpa kontrol tambahan (TLS, identity per-user, rate limit, dsb.).
+- Rotasi token: ganti nilai di `.env` API dan web, restart kedua proses; jangan commit nilai nyata.
 
 ## Orkestrasi agen (Phase 4B)
 
@@ -98,8 +101,8 @@ Kontrak rencana `schema_version: "2"`, JSON ketat, dan digest approval (plan + p
 
 SQLite task repository + wiring aplikasi: migrasi wajib saat open; failure migrasi menggagalkan startup; koneksi ditutup pada shutdown untuk store yang dimiliki aplikasi. Integrity approval (re-validate plan + profile + digest) pada get/approve/execute bersifat fail-closed tanpa auto-repair. `PRAGMA busy_timeout` (5s) mengurangi gagal langsung saat kontensi singkat; **bukan** jaminan multi-worker.
 
-Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). `list_by_lifecycle` diurutkan `id ASC`. Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap. `GET /health` menyertakan ringkasan `startup` (counts/flags/task ids saja; tanpa path absolut atau pesan error mentah).
+Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). `list_by_lifecycle` diurutkan `id ASC`. Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap. `GET /health` menyertakan ringkasan `startup` (counts/flags saja; tanpa UUID task, path absolut, atau pesan error mentah). Bearer auth pada `/tasks*` (4H.1) bersifat shared-secret, bukan IAM multi-user.
 
 ## Keputusan yang ditunda
 
-Cleanup/quarantine orphan otomatis, retry terbatas (4F), reviewer agent (4D), autentikasi, atomic task claims / multi-worker SQLite (4G.2+), queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
+Cleanup/quarantine orphan otomatis, retry terbatas (4F), reviewer agent (4D), multi-user identity / OAuth, atomic task claims / multi-worker SQLite (4G.2+), queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
