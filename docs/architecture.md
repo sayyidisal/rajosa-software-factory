@@ -34,9 +34,9 @@ Profil tidak dikenal ditolak dengan HTTP 422. Tidak ada inference semantik dari 
 Task dan event orkestrasi disimpan di SQLite (`TASK_DB_PATH`, default `apps/api/var/rajosa.sqlite3`, di luar workspace task). Asumsi **single-process**: jangan menjalankan beberapa worker uvicorn terhadap satu file DB.
 
 - Restart dengan path DB yang sama membuat task/event tetap terbaca; tidak ada auto-resume planner/implementer/runner saat startup.
-- Task nonterminal dibiarkan apa adanya; recovery/orphan policy adalah tahap terpisah (bukan 4E.2).
+- Startup (store yang dimiliki aplikasi): mid-flight `created`/`planning`/`generating`/`validating` → `failed` (`interrupted`); wait states dan terminal tidak diubah. Reconciliation workspace bersifat read-only (orphan/missing/digest mirror/staging).
 - `approval_digest` di DB adalah bukti untuk diverifikasi ulang, bukan bukti approval yang cukup sendiri.
-- Tes offline tetap dapat meng-inject `MemoryTaskStore`.
+- Tes offline tetap dapat meng-inject `MemoryTaskStore` (tanpa startup recovery otomatis).
 
 Field:
 
@@ -85,10 +85,12 @@ Orchestrator deterministik + approval rencana wajib: [agent-orchestration-design
 
 Kontrak rencana `schema_version: "2"`, JSON ketat, dan digest approval (plan + profile): [phase-4c-design.md](./phase-4c-design.md).
 
-## Persistensi (Phase 4E.1–4E.2)
+## Persistensi (Phase 4E.1–4E.3)
 
 SQLite task repository + wiring aplikasi: migrasi wajib saat open; failure migrasi menggagalkan startup; koneksi ditutup pada shutdown untuk store yang dimiliki aplikasi. Integrity approval (re-validate plan + profile + digest) pada get/approve/execute bersifat fail-closed tanpa auto-repair.
 
+Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap.
+
 ## Keputusan yang ditunda
 
-Recovery/orphan reconciliation (lanjutan 4E), retry terbatas (4F), reviewer agent (4D), autentikasi, worker asinkron / multi-worker SQLite, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
+Cleanup/quarantine orphan otomatis, retry terbatas (4F), reviewer agent (4D), autentikasi, worker asinkron / multi-worker SQLite, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.

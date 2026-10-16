@@ -1,4 +1,4 @@
-"""In-memory orchestration events (not durable across restarts)."""
+"""Orchestration events (durable when stored via TaskRepository / SQLite)."""
 
 from __future__ import annotations
 

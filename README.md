@@ -148,7 +148,11 @@ Contoh:
 
 ## Batas yang disengaja
 
-Task store hanya berada di memori proses backend. Seluruh task hilang saat backend restart.
+Task dan event orkestrasi disimpan di SQLite secara default (`TASK_DB_PATH`, biasanya `apps/api/var/rajosa.sqlite3`, di luar workspace task). Task dan event **bertahan** melewati restart backend selama path DB sama.
+
+Saat startup (store yang dimiliki aplikasi): task di state interruptible (`created`, `planning`, `generating`, `validating`) ditandai `failed` dengan `error_category=interrupted`. Task `awaiting_plan_approval` atau `awaiting_execution_auth` tetap menunggu tindakan manusia eksplisit. Recovery **tidak** otomatis melanjutkan planner/implementer atau mengeksekusi kode.
+
+Persistensi ini **bukan** jaminan exactly-once execution, keamanan multi-process/multi-worker terhadap satu file DB, atau pemulihan setiap side effect eksternal (artefak di disk, container, dsb.).
 
 Workspace memberikan path containment. Runner kontainer (jika diaktifkan) menambah containment terpisah untuk tes Python yang diotorisasi secara eksplisit — tetap bukan sandbox produksi.
 

@@ -15,10 +15,12 @@ from app.domain.store import TaskRepository
 from app.execution.concurrency import GLOBAL_EXECUTION_GATE
 from app.execution.factory import build_execution_runner
 from app.execution.service import ExecutionService
+from app.orchestration.recovery import recover_interrupted_tasks
 from app.orchestration.service import OrchestratorService
 from app.persistence.sqlite import SqliteTaskRepository
 from app.quality.basic import BasicQualityGate
 from app.workspaces.local import LocalWorkspace
+from app.workspaces.reconcile import ReconciliationReport, reconcile_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,43 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        owned = getattr(app.state, "task_store_owned", False)
+        if owned and not getattr(app.state, "startup_recovery_completed", False):
+            store = app.state.task_store
+            workspace = app.state.workspace
+            # DB recovery first — StartupRecoveryError aborts startup.
+            recovery_report = recover_interrupted_tasks(store)
+            app.state.startup_recovery_report = recovery_report
+            app.state.startup_recovery_completed = True
+            logger.info(
+                "startup recovery examined=%s interrupted=%s",
+                recovery_report.examined,
+                len(recovery_report.interrupted_task_ids),
+            )
+            try:
+                recon = reconcile_workspaces(workspace=workspace, store=store)
+            except Exception as exc:
+                logger.exception("workspace reconciliation raised")
+                recon = ReconciliationReport()
+                recon.mark_failed(str(exc))
+            app.state.reconciliation_report = recon
+            if recon.incomplete:
+                logger.error(
+                    "workspace reconciliation incomplete: %s", recon.error
+                )
+            else:
+                logger.info(
+                    "workspace reconciliation orphans=%s missing=%s "
+                    "leftover_exec=%s digest_issues=%s skipped_unsafe=%s",
+                    len(recon.orphan_workspace_dirs),
+                    len(recon.missing_workspaces),
+                    len(recon.leftover_executions),
+                    len(recon.digest_mirror_issues),
+                    len(recon.skipped_unsafe),
+                )
+
         yield
+
         # Only close stores we opened; injected test doubles keep their own lifecycle.
         if not getattr(app.state, "task_store_owned", False):
             return
@@ -106,9 +144,13 @@ def create_app(
     app.state.execution_service = execution_service
     app.state.task_store = selected_store
     app.state.task_store_owned = owns_store
+    app.state.workspace = selected_workspace
     app.state.settings = settings
     app.state.agent_adapter = adapter_name
     app.state.execution_runner = settings.execution_runner
+    app.state.startup_recovery_completed = False
+    app.state.startup_recovery_report = None
+    app.state.reconciliation_report = None
 
     logger.info(
         "agent adapter selected: %s (class=%s)",

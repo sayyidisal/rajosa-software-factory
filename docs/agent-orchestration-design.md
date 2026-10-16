@@ -124,13 +124,14 @@ Task JSON always includes:
 - `execution` — unchanged shape
 - `plan`, `plan_approved`, `events` — new
 
-### 2.8 Persistence limitations (documented)
+### 2.8 Persistence and startup recovery (current)
 
-- `MemoryTaskStore` only — tasks/events lost on API restart.
-- No crash recovery, durability, or exactly-once across process boundaries.
+- Default store is SQLite (`TASK_DB_PATH`, outside task workspaces). Tasks and orchestration events survive API restarts when the same DB path is reused. Tests may still inject `MemoryTaskStore` (no automatic startup recovery for injected stores).
+- Single-process assumption: do not attach multiple uvicorn workers to one SQLite file. Durability is not exactly-once execution and does not recover every external side effect.
+- Startup recovery (owned store only): interruptible lifecycles `created`, `planning`, `generating`, and `validating` are marked `failed` with `error_category=interrupted`. Waiting states (`awaiting_plan_approval`, `awaiting_execution_auth`) and terminals (`completed`, `failed`) are left unchanged. There is no auto-resume of planner, implementer, or runner.
+- Workspace reconciliation at startup is read-only (orphan/missing dirs, digest-mirror drift, leftover `_executions`); it does not delete or rewrite artifacts.
 - Concurrent approval: in-process per-task lock prevents duplicate implementation **within one process**.
 - The per-task lock is held through the implementer call (not a global lock) so a second approval cannot start while the first is still generating.
-- Process crash after `generating` begins can leave an ambiguous in-memory state until restart clears it; there is no automatic retry.
 - On approval, the server freezes `plan.json`, records `plan.approved.sha256`, and passes that exact plan JSON to the implementer inside an `[APPROVED_PLAN]` envelope.
 
 ### 2.9 Security invariants (preserved)
@@ -148,7 +149,7 @@ Task JSON always includes:
 
 ### 2.10 Explicit Phase 4B non-goals
 
-- SQLite / durable store (4E)
+- SQLite / durable store (deferred to 4E; now delivered in 4E.0–4E.3 — auto-resume / orphan cleanup still deferred)
 - Automatic retries / unbounded loops (4F)
 - Reviewer / test-analyst agents (4D)
 - Artifact versioning system beyond `plan.json` + `result.txt`
@@ -203,7 +204,7 @@ curl -s http://127.0.0.1:8000/tasks/<id>/execute-tests \
 | 4B Minimal orchestrator + mandatory plan approval | **Done** |
 | 4C Structured plan v2 + strict validation | **Done** — see [phase-4c-design.md](./phase-4c-design.md) |
 | 4D Artifact provenance / optional reviewer | Not started |
-| 4E SQLite persistence | **4E.0–4E.2 done** (protocol + SQLite core + app wiring/integrity); recovery/auto-resume deferred |
+| 4E SQLite persistence | **4E.0–4E.3 done** (protocol + SQLite + integrity + startup recovery/reconcile); auto-resume / orphan cleanup deferred |
 | 4F Bounded retry + evaluation harness | Not started |
 
 ---
