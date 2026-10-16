@@ -103,7 +103,7 @@ SQLite task repository + wiring aplikasi: migrasi wajib saat open; failure migra
 
 Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupted` secara idempotent (lifecycle persisted). `list_by_lifecycle` diurutkan `id ASC`. Workspace reconciliation mendeteksi orphan/missing/digest-mirror/staging leftovers tanpa menghapus artefak. Kegagalan recovery DB menggagalkan startup; kegagalan scan FS dicatat sebagai laporan tidak lengkap. `GET /health` menyertakan ringkasan `startup` (counts/flags saja; tanpa UUID task, path absolut, atau pesan error mentah). Bearer auth pada `/tasks*` (4H.1) bersifat shared-secret, bukan IAM multi-user.
 
-Backup/restore offline (4H.2): DB memakai WAL — jangan mengandalkan salinan mentah file utama saja. Prosedur: hentikan API bila memungkinkan, lalu `python -m app.persistence.backup_cli` (checkpoint + online backup API + SHA-256 + `PRAGMA integrity_check`). Detail: [sqlite-backup.md](./sqlite-backup.md).
+Backup/restore offline (4H.2–4H.3): DB memakai WAL — jangan mengandalkan salinan mentah file utama saja. Prosedur: hentikan API bila memungkinkan, lalu `python -m app.persistence.backup_cli` (checkpoint + online backup API + SHA-256 + `PRAGMA integrity_check`). Restore drill terisolasi (DB disposable + `materialize_verified_restore`) ada di tes offline; itu **bukan** klaim pemulihan produksi. Detail: [sqlite-backup.md](./sqlite-backup.md).
 
 ## Keputusan yang ditunda
 

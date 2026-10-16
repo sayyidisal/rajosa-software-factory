@@ -204,6 +204,12 @@ def create_sqlite_backup(
     dest.parent.mkdir(parents=True, exist_ok=True)
     checksum_path = Path(str(dest) + ".sha256")
     checksum_tmp = Path(str(checksum_path) + ".tmp")
+    # Refuse pre-existing adjacent checksum artifacts so cleanup cannot delete
+    # orphan operator files that this call did not create (Phase 4H.3).
+    if checksum_path.exists():
+        raise BackupError(f"checksum destination already exists: {checksum_path}")
+    if checksum_tmp.exists():
+        raise BackupError(f"checksum temp already exists: {checksum_tmp}")
 
     source_conn: sqlite3.Connection | None = None
     dest_conn: sqlite3.Connection | None = None
@@ -335,3 +341,59 @@ def read_checksum_file(path: Path) -> str:
     if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise BackupError(f"invalid checksum file: {resolved}")
     return digest
+
+
+@dataclass(frozen=True)
+class RestoreDrillResult:
+    """Outcome of an isolated verify-then-copy restore (never touches live DB)."""
+
+    backup_path: Path
+    restore_path: Path
+    restore_checksum_path: Path
+    source_verify: VerifyResult
+    restore_verify: VerifyResult
+
+
+def materialize_verified_restore(
+    *,
+    backup_path: Path,
+    checksum_path: Path,
+    restore_path: Path,
+) -> RestoreDrillResult:
+    """Verify a backup, then copy it to a new path via the online backup API.
+
+    Intended for disposable restore drills and offline operator practice.
+    Does **not** replace ``TASK_DB_PATH``, start the API, or invoke agents/runners.
+    Refuses to overwrite an existing ``restore_path``.
+    """
+    expected = read_checksum_file(checksum_path)
+    source_verify = verify_sqlite_backup(
+        dest_path=backup_path,
+        expected_sha256=expected,
+    )
+    restore = restore_path.expanduser().resolve()
+    if restore.exists():
+        raise BackupError(f"restore destination already exists: {restore}")
+    backup = backup_path.expanduser().resolve()
+    if restore == backup:
+        raise BackupError("restore destination must differ from backup path")
+
+    # Re-use create_sqlite_backup so restore gets its own checksum publication
+    # and the same fail-closed cleanup semantics. Checkpoint is unnecessary for
+    # a single-file verified backup snapshot.
+    copied = create_sqlite_backup(
+        source_path=backup,
+        dest_path=restore,
+        checkpoint=False,
+    )
+    restore_verify = verify_sqlite_backup(
+        dest_path=copied.backup_path,
+        expected_sha256=copied.sha256,
+    )
+    return RestoreDrillResult(
+        backup_path=backup,
+        restore_path=copied.backup_path,
+        restore_checksum_path=copied.checksum_path,
+        source_verify=source_verify,
+        restore_verify=restore_verify,
+    )

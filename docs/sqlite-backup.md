@@ -1,4 +1,4 @@
-# SQLite backup and restore (Phase 4H.2)
+# SQLite backup and restore (Phase 4H.2 / 4H.3)
 
 Offline operator procedure for the Rajosa task database (`TASK_DB_PATH`, default `apps/api/var/rajosa.sqlite3`).
 
@@ -91,6 +91,39 @@ Checks:
 - Restrict backup directories to the service account / developer user.
 - Helpers set owner read/write on backup + checksum when `chmod` is available.
 
+## Isolated restore drill (Phase 4H.3)
+
+Automated offline coverage lives in `apps/api/tests/test_sqlite_restore_drill.py`. That suite:
+
+1. Seeds a **disposable** database via `SqliteTaskRepository` (real schema + migration `001`).
+2. Creates a backup and verifies checksum + structural integrity.
+3. Materializes a restore copy to a **separate** path (`materialize_verified_restore`) — never overwrites an existing destination and never targets the live `TASK_DB_PATH`.
+4. Opens the restore result read-only and checks migrations, tasks, append-only events, and lifecycle counts.
+5. Proves bad checksum / corrupt payloads are rejected **before** a restore file is created.
+6. Proves failed restore attempts leave the source DB and a valid backup untouched.
+7. Confirms the restore path does not newly import planner/implementer adapters or the Docker runner.
+
+Operator practice (still offline, still disposable paths):
+
+```bash
+# After a successful verify of a backup file:
+.venv/bin/python - <<'PY'
+from pathlib import Path
+from app.persistence.backup import materialize_verified_restore
+
+materialize_verified_restore(
+    backup_path=Path("var/backups/YOUR-BACKUP.sqlite3"),
+    checksum_path=Path("var/backups/YOUR-BACKUP.sqlite3.sha256"),
+    restore_path=Path("var/backups/restore-drill-readonly.sqlite3"),
+)
+print("ok")
+PY
+```
+
+Use a path under `var/backups/` (or another scratch directory) — **not** `var/rajosa.sqlite3`. Delete the drill copy when finished.
+
+**Claim boundary:** passing disposable restore drills proves helper + runbook mechanics. It does **not** prove production recovery, RPO/RTO, multi-process safety, or that a live cutover was executed.
+
 ## Limitations
 
 - Not multi-worker safe; not a substitute for authentication or network hardening.
@@ -98,3 +131,5 @@ Checks:
 - Does not encrypt backups; treat files as sensitive (task plans/outputs).
 - Failed checksum, missing checksum, or integrity_check ⇒ do not restore that file.
 - No claimed RPO/RTO; no scheduled or remote backup service.
+- No automatic restore HTTP endpoint; restore remains an offline operator procedure.
+- `create_sqlite_backup` refuses an existing adjacent `.sha256` (or `.sha256.tmp`) so cleanup cannot delete orphan checksum files it did not create.
