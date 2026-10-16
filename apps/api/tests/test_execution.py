@@ -419,6 +419,8 @@ def test_docker_argv_enforces_no_network_and_no_host_env(tmp_path: Path) -> None
     assert "no-new-privileges:true" in argv
     assert "--cap-drop" in argv
     assert "ALL" in argv
+    assert "--name" in argv
+    assert argv[argv.index("--name") + 1] == f"rajosa-exec-{req.execution_id}"
     joined = " ".join(argv)
     assert "docker.sock" not in joined
     assert "SUMOPOD_API_KEY" not in joined

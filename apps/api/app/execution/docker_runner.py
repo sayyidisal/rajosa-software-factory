@@ -4,6 +4,10 @@ Does not pull images. Does not execute on the host as a fallback.
 Does not pass host environment variables into the job.
 Requires a pinned per-container seccomp profile; never falls back to unconfined.
 Feature remains unavailable when the daemon or pinned image is missing.
+
+On wall-clock timeout, best-effort ``docker kill`` targets only the exact
+``--name`` derived from the execution UUID. This does not claim multi-worker
+safety or prove daemon-level cleanup without integration tests.
 """
 
 from __future__ import annotations
@@ -12,7 +16,9 @@ import logging
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
+from typing import Literal
 
 from app.execution.limits import (
     APPROVED_RUNTIME_ID,
@@ -34,6 +40,57 @@ logger = logging.getLogger(__name__)
 
 # Docker CLI convention: 125 = daemon/client error starting the container.
 _DOCKER_INFRA_EXIT_CODES = frozenset({125, 126, 127})
+
+# Stable, unique container names for timeout kill — never guessed from task title.
+CONTAINER_NAME_PREFIX = "rajosa-exec-"
+# Bound how long we wait for ``docker kill`` so cleanup cannot hang forever.
+CONTAINER_KILL_TIMEOUT_SECONDS = 5
+
+ContainerTermination = Literal["confirmed", "failed", "skipped_no_identity"]
+
+
+def container_name_for_execution(execution_id: str) -> str:
+    """Return the Docker ``--name`` for this execution, or raise if ambiguous."""
+    try:
+        parsed = uuid.UUID(execution_id)
+    except ValueError as exc:
+        raise ValueError("execution_id must be a UUID for container naming") from exc
+    if str(parsed) != execution_id:
+        raise ValueError("execution_id must be a canonical UUID for container naming")
+    return f"{CONTAINER_NAME_PREFIX}{execution_id}"
+
+
+def best_effort_kill_container(
+    *,
+    docker_bin: str,
+    container_name: str | None,
+    kill_timeout_seconds: int = CONTAINER_KILL_TIMEOUT_SECONDS,
+) -> ContainerTermination:
+    """Attempt ``docker kill`` for one exact name. Never invents identifiers."""
+    if not container_name or not container_name.startswith(CONTAINER_NAME_PREFIX):
+        return "skipped_no_identity"
+    # Reject path-like or multi-token names before shelling out.
+    if any(part in container_name for part in ("/", "\\", " ", "\t", "\n")):
+        return "skipped_no_identity"
+    try:
+        completed = subprocess.run(
+            [docker_bin, "kill", container_name],
+            capture_output=True,
+            timeout=max(1, int(kill_timeout_seconds)),
+            check=False,
+            env={"PATH": _safe_path()},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.error("container kill failed for name=%s", container_name)
+        return "failed"
+    if completed.returncode == 0:
+        return "confirmed"
+    logger.error(
+        "container kill returned rc=%s for name=%s",
+        completed.returncode,
+        container_name,
+    )
+    return "failed"
 
 
 class LocalDockerExecutionRunner:
@@ -102,10 +159,15 @@ class LocalDockerExecutionRunner:
         cpus = str(request.limits.cpu_quota)
         pids = str(request.limits.pids_limit)
 
+        # Exact name required so timeout cleanup can target only this execution.
+        container_name = container_name_for_execution(request.execution_id)
+
         argv: list[str] = [
             self.docker_bin,
             "run",
             "--rm",
+            "--name",
+            container_name,
             "--network",
             "none",
             "--read-only",
@@ -220,6 +282,11 @@ class LocalDockerExecutionRunner:
 
         timeout = request.limits.wall_clock_seconds
         try:
+            container_name = container_name_for_execution(request.execution_id)
+        except ValueError:
+            container_name = None
+
+        try:
             completed = subprocess.run(
                 argv,
                 capture_output=True,
@@ -231,6 +298,15 @@ class LocalDockerExecutionRunner:
         except subprocess.TimeoutExpired as exc:
             stdout = truncate_bytes(exc.stdout or b"", request.limits.max_stdout_bytes)
             stderr = truncate_bytes(exc.stderr or b"", request.limits.max_stderr_bytes)
+            # Primary failure remains timeout. Best-effort kill uses exact --name only.
+            termination = best_effort_kill_container(
+                docker_bin=self.docker_bin,
+                container_name=container_name,
+            )
+            detail = (
+                "Execution exceeded wall-clock limit; "
+                f"container_termination={termination}"
+            )
             return ExecutionResult(
                 execution_id=request.execution_id,
                 status="timed_out",
@@ -241,7 +317,7 @@ class LocalDockerExecutionRunner:
                 runner_error_category="timeout",
                 stdout_summary=stdout,
                 stderr_summary=stderr,
-                detail="Execution exceeded wall-clock limit",
+                detail=detail,
                 duration_ms=_ms(started),
             ).validated()
         except OSError:

@@ -69,7 +69,7 @@ Workspace menahan path di dalam root yang ditentukan. Ini adalah path containmen
 - Matriks kontrol & inspeksi runtime (Phase 3C): [execution-controls.md](./execution-controls.md).
 - Definisi image yang diusulkan (belum di-build sampai disetujui): [../docker/execution/README.md](../docker/execution/README.md).
 
-Isolasi kontainer lokal **bukan** jaminan keamanan lengkap. `EXECUTION_RUNNER` tetap `off` secara default.
+Isolasi kontainer lokal **bukan** jaminan keamanan lengkap. `EXECUTION_RUNNER` tetap `off` secara default. Pada timeout, runner mencoba `docker kill` terhadap nama kontainer tepat (`rajosa-exec-<execution_uuid>`); ini best-effort dan tidak menggantikan uji integrasi daemon.
 
 ## Keamanan operasional
 
