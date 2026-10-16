@@ -463,11 +463,9 @@ class OrchestratorService:
         )
 
     def _append_event(self, task: Task, event: OrchestrationEvent) -> Task:
-        events = list(task.events) + [event]
-        # Bound retained events in memory.
-        if len(events) > 100:
-            events = events[-100:]
-        return task.model_copy(update={"events": events})
+        # Append-only in the in-memory task view. Durable stores keep full
+        # history via TaskRepository save semantics (no repository-side cap).
+        return task.model_copy(update={"events": list(task.events) + [event]})
 
     def _validation_error(self, report: QualityReport) -> str:
         failed = [check.detail for check in report.checks if not check.passed]

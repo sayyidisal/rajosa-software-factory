@@ -1,4 +1,4 @@
-"""Task persistence contracts and the in-memory adapter (Phase 4E.0).
+"""Task persistence contracts and the in-memory adapter (Phase 4E).
 
 Business rules (lifecycle transitions, approval, execution auth) remain in the
 orchestrator / execution services — not in the repository.
@@ -18,18 +18,18 @@ from app.orchestration.lifecycle import Lifecycle
 class TaskRepository(Protocol):
     """Minimum persistence surface for Phase 4E.
 
-    ``save`` upserts task fields. Events are append-only by ``event_id``:
+    ``save`` upserts task fields. Event history is **append-only** by
+    ``event_id`` and is never replaced or cleared by a normal save:
 
-    - ``new_events=None`` (legacy / current callers): store the task snapshot
-      as provided, including its ``events`` list (full replace of that task's
-      event list in memory). Callers that already merge events onto the task
-      before ``save`` keep working unchanged.
-    - ``new_events=[...]``: upsert scalar/nested task fields from ``task``,
-      then append only events whose ``event_id`` is not already stored.
-      Duplicate ids in ``new_events`` or across saves are skipped. The stored
-      ``task.events`` becomes prior events plus newly appended ones (the
-      ``events`` field on the incoming ``task`` is not used as an insert
-      source in this mode).
+    - ``new_events=None``: upsert task state; append any events present on
+      ``task.events`` that are not already stored. Prior stored events that
+      are missing from ``task.events`` are **kept** (no wipe).
+    - ``new_events=[...]``: upsert task state; append only the provided
+      events (skip duplicates by ``event_id``). The ``events`` field on the
+      incoming ``task`` is not used as an insert source in this mode.
+
+    Duplicate ``event_id`` values are skipped (idempotent). Events whose
+    ``task_id`` does not match ``task.id`` raise ``ValueError``.
     """
 
     def get(self, task_id: str) -> Task | None:
@@ -50,8 +50,29 @@ class TaskRepository(Protocol):
         """Return all known task ids (stable sort recommended)."""
 
 
+def _append_new_events(
+    *,
+    task_id: str,
+    prior: list[OrchestrationEvent],
+    candidates: Sequence[OrchestrationEvent],
+) -> list[OrchestrationEvent]:
+    """Return ``prior`` extended with non-duplicate candidates for ``task_id``."""
+    seen = {event.event_id for event in prior}
+    merged = list(prior)
+    for event in candidates:
+        if event.event_id in seen:
+            continue
+        if event.task_id != task_id:
+            raise ValueError(
+                f"event task_id '{event.task_id}' does not match task '{task_id}'"
+            )
+        merged.append(event)
+        seen.add(event.event_id)
+    return merged
+
+
 class MemoryTaskStore:
-    """In-process dict-backed :class:`TaskRepository` (Phase 4E.0 memory adapter).
+    """In-process dict-backed :class:`TaskRepository`.
 
     Kept under the historical name so existing tests and ``create_app`` injectors
     remain compatible. Does not enforce lifecycle or terminal-state rules.
@@ -69,24 +90,19 @@ class MemoryTaskStore:
         *,
         new_events: Sequence[OrchestrationEvent] | None = None,
     ) -> Task:
-        if new_events is None:
-            self._tasks[task.id] = task
-            return task
-
         existing = self._tasks.get(task.id)
         prior = list(existing.events) if existing is not None else []
-        seen = {event.event_id for event in prior}
-        for event in new_events:
-            if event.event_id in seen:
-                continue
-            if event.task_id != task.id:
-                raise ValueError(
-                    f"event task_id '{event.task_id}' does not match task '{task.id}'"
-                )
-            prior.append(event)
-            seen.add(event.event_id)
-
-        saved = task.model_copy(update={"events": prior})
+        candidates: Sequence[OrchestrationEvent]
+        if new_events is not None:
+            candidates = new_events
+        else:
+            candidates = task.events
+        merged_events = _append_new_events(
+            task_id=task.id,
+            prior=prior,
+            candidates=candidates,
+        )
+        saved = task.model_copy(update={"events": merged_events})
         self._tasks[task.id] = saved
         return saved
 
