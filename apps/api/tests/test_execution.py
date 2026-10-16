@@ -481,45 +481,153 @@ def test_cleanup_failure_never_success(workspace_root: Path) -> None:
     assert body["execution"]["status"] == "cleanup_error"
 
 
-def test_concurrent_execution_rejected(workspace_root: Path) -> None:
+def test_concurrent_busy_does_not_fail_lifecycle_on_success(
+    workspace_root: Path,
+) -> None:
+    """H1: busy rejection must not finalize lifecycle; owner A may still complete."""
     gate = ExecutionGate()
-    blocker = threading.Event()
-    entered = threading.Event()
+    a_entered = threading.Event()
+    release_a = threading.Event()
+    run_calls = 0
+    run_lock = threading.Lock()
 
     class BlockingFake(FakeExecutionRunner):
         def run(self, request: ExecutionRequest) -> ExecutionResult:
-            entered.set()
-            blocker.wait(timeout=5)
+            nonlocal run_calls
+            with run_lock:
+                run_calls += 1
+                assert run_calls == 1, "only the gate owner may invoke the runner"
+            a_entered.set()
+            assert release_a.wait(timeout=5)
             return super().run(request)
 
     runner = BlockingFake()
     client = _app(workspace_root, runner=runner, gate_lock=gate)
     task = _create_python_exec_task(client)
+    task_id = task["id"]
 
-    results: list[dict] = []
+    a_response: list[object] = []
 
-    def first() -> None:
-        results.append(
+    def run_a() -> None:
+        a_response.append(
             client.post(
-                f"/tasks/{task['id']}/execute-tests",
+                f"/tasks/{task_id}/execute-tests",
                 json={"confirm": True},
-            ).json()
+            )
         )
 
-    t = threading.Thread(target=first)
-    t.start()
-    assert entered.wait(timeout=5)
+    thread_a = threading.Thread(target=run_a)
+    thread_a.start()
+    assert a_entered.wait(timeout=5)
 
-    second = client.post(
-        f"/tasks/{task['id']}/execute-tests",
+    mid = client.get(f"/tasks/{task_id}").json()
+    assert mid["lifecycle"] == "awaiting_execution_auth"
+    assert mid["execution"]["status"] == "not_requested"
+
+    busy = client.post(
+        f"/tasks/{task_id}/execute-tests",
         json={"confirm": True},
-    ).json()
-    assert second["execution"]["runner_error_category"] == "busy"
-    assert second["execution"]["tests_passed"] is False
+    )
+    assert busy.status_code == 409
+    assert "already active" in str(busy.json().get("detail", "")).lower()
 
-    blocker.set()
-    t.join(timeout=5)
-    assert results[0]["execution"]["tests_passed"] is True
+    after_busy = client.get(f"/tasks/{task_id}").json()
+    assert after_busy["lifecycle"] == "awaiting_execution_auth"
+    assert after_busy["status"] == "pending"
+    assert after_busy["execution"]["status"] == "not_requested"
+    assert after_busy["execution"]["tests_passed"] is False
+    assert after_busy["execution"]["runner_error_category"] in (None, "none")
+
+    release_a.set()
+    thread_a.join(timeout=5)
+    assert thread_a.is_alive() is False
+
+    assert len(a_response) == 1
+    response_a = a_response[0]
+    assert getattr(response_a, "status_code") == 200
+    body_a = response_a.json()  # type: ignore[union-attr]
+    assert body_a["lifecycle"] == "completed"
+    assert body_a["status"] == "passed"
+    assert body_a["execution"]["tests_passed"] is True
+    assert body_a["execution"]["tests_executed"] is True
+    assert body_a["execution"]["runner_error_category"] == "none"
+    assert run_calls == 1
+    assert len(runner.calls) == 1
+
+
+def test_concurrent_busy_preserves_owner_failure(
+    workspace_root: Path,
+) -> None:
+    """H1: when owner A fails for real, lifecycle reflects A's failure — not B's busy."""
+    gate = ExecutionGate()
+    a_entered = threading.Event()
+    release_a = threading.Event()
+    run_calls = 0
+    run_lock = threading.Lock()
+
+    class BlockingFailFake(FakeExecutionRunner):
+        def run(self, request: ExecutionRequest) -> ExecutionResult:
+            nonlocal run_calls
+            self.calls.append(request)
+            with run_lock:
+                run_calls += 1
+                assert run_calls == 1, "only the gate owner may invoke the runner"
+            a_entered.set()
+            assert release_a.wait(timeout=5)
+            return ExecutionResult(
+                execution_id=request.execution_id,
+                status="tests_failed",
+                exit_code=1,
+                tests_executed=True,
+                tests_passed=False,
+                detail="owner failure",
+            ).validated()
+
+    runner = BlockingFailFake()
+    client = _app(workspace_root, runner=runner, gate_lock=gate)
+    task = _create_python_exec_task(client)
+    task_id = task["id"]
+
+    a_response: list[object] = []
+
+    def run_a() -> None:
+        a_response.append(
+            client.post(
+                f"/tasks/{task_id}/execute-tests",
+                json={"confirm": True},
+            )
+        )
+
+    thread_a = threading.Thread(target=run_a)
+    thread_a.start()
+    assert a_entered.wait(timeout=5)
+
+    busy = client.post(
+        f"/tasks/{task_id}/execute-tests",
+        json={"confirm": True},
+    )
+    assert busy.status_code == 409
+
+    after_busy = client.get(f"/tasks/{task_id}").json()
+    assert after_busy["lifecycle"] == "awaiting_execution_auth"
+    assert after_busy["execution"]["status"] == "not_requested"
+
+    release_a.set()
+    thread_a.join(timeout=5)
+    assert thread_a.is_alive() is False
+
+    assert len(a_response) == 1
+    response_a = a_response[0]
+    assert getattr(response_a, "status_code") == 200
+    body_a = response_a.json()  # type: ignore[union-attr]
+    assert body_a["lifecycle"] == "failed"
+    assert body_a["status"] == "failed"
+    assert body_a["execution"]["tests_passed"] is False
+    assert body_a["execution"]["tests_executed"] is True
+    assert body_a["execution"]["detail"] == "owner failure"
+    assert body_a["error"] == "owner failure"
+    assert run_calls == 1
+    assert len(runner.calls) == 1
 
 
 def test_clamp_limits_hard_max() -> None:

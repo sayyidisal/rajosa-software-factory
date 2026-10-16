@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from app.domain.models import PlanDecisionBody, Task, TaskCreate
+from app.execution.concurrency import ExecutionBusyError
 from app.execution.models import ExecuteTestsBody
 from app.orchestration.service import OrchestrationConflict
 
@@ -79,5 +80,10 @@ def execute_tests(
         )
     except LookupError:
         raise HTTPException(status_code=404, detail="Task not found") from None
+    except ExecutionBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc) or "Another local execution is already active",
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

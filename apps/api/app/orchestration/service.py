@@ -241,6 +241,11 @@ class OrchestratorService:
                     category="invalid_result",
                 )
 
+            # Busy is a rejected concurrent request, not an owned execution outcome.
+            # Never finalize lifecycle or overwrite prior evidence for busy.
+            if execution.runner_error_category == "busy":
+                return current
+
             # Require validated success shape — never complete on claims alone.
             if (
                 execution.status == "completed"

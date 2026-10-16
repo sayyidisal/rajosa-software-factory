@@ -10,7 +10,7 @@ from pathlib import Path
 from app.domain.models import AgentResult, Task
 from app.domain.store import MemoryTaskStore
 from app.execution.base import ExecutionRunner
-from app.execution.concurrency import ExecutionBusyError, ExecutionGate
+from app.execution.concurrency import ExecutionGate
 from app.execution.limits import (
     APPROVED_RUNTIME_ID,
     APPROVED_TEST_PROFILE,
@@ -204,16 +204,8 @@ class ExecutionService:
                         runner_error_category="runtime_crash",
                         detail="Runner failed unexpectedly",
                     )
-        except ExecutionBusyError:
-            return self._persist(
-                task,
-                ExecutionResult(
-                    execution_id=execution_id,
-                    status="rejected",
-                    runner_error_category="busy",
-                    detail="Another local execution is already active",
-                ),
-            )
+        # ExecutionBusyError from gate.acquire must propagate: busy is a request
+        # rejection, not an execution outcome. Do not persist or finalize lifecycle.
         finally:
             try:
                 cleanup_staging(staging_root)
