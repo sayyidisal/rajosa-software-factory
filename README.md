@@ -28,6 +28,8 @@ make dev-api
 make dev-web
 ```
 
+`make dev-api` menjalankan **satu** proses API (`python -m app.run_dev`, Uvicorn `--reload`). Jangan menambah `--workers` atau mengatur `WEB_CONCURRENCY>1`. Beberapa worker/instance yang berbagi SQLite/workspace yang sama **tidak didukung**.
+
 API: `http://127.0.0.1:8000`  
 Web: `http://127.0.0.1:3000` (dan `http://localhost:3000`)
 
@@ -154,7 +156,9 @@ Saat startup (store yang dimiliki aplikasi): task di state interruptible (`creat
 
 Persistensi ini **bukan** jaminan exactly-once execution, keamanan multi-process/multi-worker terhadap satu file DB, atau pemulihan setiap side effect eksternal (artefak di disk, container, dsb.).
 
-Workspace memberikan path containment. Runner kontainer (jika diaktifkan) menambah containment terpisah untuk tes Python yang diotorisasi secara eksplisit — tetap bukan sandbox produksi.
+**Topologi yang didukung:** tepat satu proses API per DB + workspace (`make dev-api`). Prefer `TASK_DB_PATH` / `WORKSPACE_ROOT` absolut. **Tidak didukung:** `uvicorn --workers N` (N>1), beberapa instance berbagi storage yang sama, paparan eksternal / multi-tenant tanpa kontrol tambahan. Guard pada entry point dev menolak `WEB_CONCURRENCY!=1` dan `--workers`≠1; memanggil Uvicorn mentah di luar `make dev-api` tetap bisa salah konfigurasi.
+
+Workspace memberikan path containment. Runner kontainer (jika diaktifkan) menambah containment terpisah untuk tes Python yang diotorisasi secara eksplisit — tetap bukan sandbox produksi. `EXECUTION_RUNNER` default `off`.
 
 `status` task yang `passed` dari quality gate **tidak** berarti `execution.tests_passed`. Bukti runtime ada di field `execution`.
 

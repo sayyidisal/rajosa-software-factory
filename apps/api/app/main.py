@@ -38,6 +38,7 @@ def _build_default_store(task_db_path) -> TaskRepository:
     """Open SQLite at ``task_db_path``; migrations run in the constructor.
 
     Single-process assumption: do not attach multiple uvicorn workers to one DB.
+    Supported local entry point: ``python -m app.run_dev`` (see Phase 4G.1).
     """
     task_db_path.parent.mkdir(parents=True, exist_ok=True)
     return SqliteTaskRepository(task_db_path)

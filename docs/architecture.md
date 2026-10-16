@@ -31,7 +31,7 @@ Profil tidak dikenal ditolak dengan HTTP 422. Tidak ada inference semantik dari 
 
 ## Task, lifecycle, dan quality gate
 
-Task dan event orkestrasi disimpan di SQLite (`TASK_DB_PATH`, default `apps/api/var/rajosa.sqlite3`, di luar workspace task). Asumsi **single-process**: jangan menjalankan beberapa worker uvicorn terhadap satu file DB.
+Task dan event orkestrasi disimpan di SQLite (`TASK_DB_PATH`, default `apps/api/var/rajosa.sqlite3`, di luar workspace task). Topologi yang didukung: **tepat satu proses API** per pasangan DB + workspace. Entry point lokal: `make dev-api` → `python -m app.run_dev` (satu proses + `--reload`). Tidak didukung: `uvicorn --workers N` (N>1), `WEB_CONCURRENCY>1`, atau beberapa instance yang berbagi DB/workspace yang sama. Path absolut untuk `TASK_DB_PATH` / `WORKSPACE_ROOT` disarankan agar resolusi path konsisten.
 
 - Restart dengan path DB yang sama membuat task/event tetap terbaca; tidak ada auto-resume planner/implementer/runner saat startup.
 - Startup (store yang dimiliki aplikasi): mid-flight `created`/`planning`/`generating`/`validating` → `failed` (`interrupted`); wait states dan terminal tidak diubah. Reconciliation workspace bersifat read-only (orphan/missing/digest mirror/staging).
@@ -75,7 +75,16 @@ Isolasi kontainer lokal **bukan** jaminan keamanan lengkap. `EXECUTION_RUNNER` t
 
 API default mendengarkan `127.0.0.1`. Frontend development diikat ke localhost. API key SumoPod hanya boleh ada di environment backend, bukan di frontend atau `NEXT_PUBLIC_*`.
 
-API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang sesuai.
+API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang sesuai. Paparan eksternal dan multi-tenant **bukan** topologi yang ditetapkan aman oleh fase ini.
+
+### Checklist deployment (Phase 4G.1)
+
+- Satu proses API per `TASK_DB_PATH` + `WORKSPACE_ROOT`.
+- Jangan pakai `uvicorn --workers N` untuk N>1 terhadap DB yang sama.
+- Jangan jalankan beberapa instance API yang berbagi SQLite/workspace yang sama.
+- Prefer path absolut untuk `TASK_DB_PATH` dan `WORKSPACE_ROOT`.
+- `EXECUTION_RUNNER` tetap `off` secara default.
+- Guard `make dev-api` menolak `WEB_CONCURRENCY!=1` / `--workers`≠1; **bukan** pencegah universal jika operator memanggil Uvicorn langsung di luar entry point itu.
 
 ## Orkestrasi agen (Phase 4B)
 
@@ -93,4 +102,4 @@ Startup recovery (4E.3): fail mid-flight tasks dengan `error_category=interrupte
 
 ## Keputusan yang ditunda
 
-Cleanup/quarantine orphan otomatis, retry terbatas (4F), reviewer agent (4D), autentikasi, worker asinkron / multi-worker SQLite, queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
+Cleanup/quarantine orphan otomatis, retry terbatas (4F), reviewer agent (4D), autentikasi, atomic task claims / multi-worker SQLite (4G.2+), queue, Turborepo atau Nx, remote Git, design system, dan remote execution workers.
