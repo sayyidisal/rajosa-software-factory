@@ -87,6 +87,7 @@ API tidak boleh diekspos ke internet tanpa autentikasi dan kontrol keamanan yang
 - Guard `make dev-api` menolak `WEB_CONCURRENCY!=1` / `--workers`≠1; **bukan** pencegah universal jika operator memanggil Uvicorn langsung di luar entry point itu.
 - Set `RAJOSA_API_TOKEN` (panjang, acak) pada API dan pada server Next.js (`apps/web`, **bukan** `NEXT_PUBLIC_*`). Proxy `/backend/*` menyuntikkan bearer di sisi server.
 - Loopback (`127.0.0.1`) **bukan** pengganti autentikasi. Paparan publik tetap tidak didukung tanpa kontrol tambahan (TLS, identity per-user, rate limit, dsb.).
+- Hardening pra-deployment (belum diimplementasi di fase lokal ini): uji otomatis proxy Next `/backend/*` (strip Authorization klien + inject token server) dan allowlist `API_INTERNAL_URL` ke loopback/host tepercaya saja.
 - Rotasi token: ganti nilai di `.env` API dan web, restart kedua proses; jangan commit nilai nyata.
 
 ## Orkestrasi agen (Phase 4B)

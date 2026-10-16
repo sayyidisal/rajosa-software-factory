@@ -36,6 +36,20 @@ make dev-web
 
 `make dev-api` menjalankan **satu** proses API (`python -m app.run_dev`, Uvicorn `--reload`). Jangan menambah `--workers` atau mengatur `WEB_CONCURRENCY>1`. Beberapa worker/instance yang berbagi SQLite/workspace yang sama **tidak didukung**.
 
+Untuk smoke lokal terisolasi (DB/workspace disposable, `AGENT_ADAPTER=mock`, `EXECUTION_RUNNER=off`, token smoke hanya di environment proses — tidak mengubah default `dev-api`):
+
+```bash
+make smoke-api
+```
+
+Detail dan cleanup: [docs/smoke-api.md](docs/smoke-api.md).
+
+HTTP create/approve smoke (mock, runner off, loopback, disposable DB):
+
+```bash
+make smoke-api-http
+```
+
 UI memanggil `/backend/*`; Next.js menyuntikkan `Authorization: Bearer` di **server** dari `RAJOSA_API_TOKEN`. Rewrite mentah tanpa token **bukan** batas autentikasi — gate ada di FastAPI.
 
 API: `http://127.0.0.1:8000`  

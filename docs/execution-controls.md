@@ -21,12 +21,33 @@ Docker CLI present; daemon not running; image missing.
 | Network / registry during build | **None** (`--network=none`, base layer CACHED) |
 | Default config | `EXECUTION_RUNNER=off` (`.env` untouched) |
 
-## Explicit authorization
+## Explicit authorization (separate gates)
 
-1. Create task with `validation_profile=python_test_execution` (static only).
-2. `POST /tasks/{id}/execute-tests` with `{"confirm": true}`.
+Authentication, plan approval, and runner execution are **distinct**. A valid
+`Authorization: Bearer` token authenticates task routes; it does **not** by
+itself authorize plan approval outcomes or container execution.
 
-Profile alone / create-task / model text never authorize execution.
+1. Authenticate: every `/tasks*` call requires a configured bearer matching
+   `RAJOSA_API_TOKEN` (fail-closed if unset/short).
+2. Create task (`POST /tasks`) with the intended `validation_profile`.
+   Create generates a structured plan and stops at `awaiting_plan_approval`.
+   Create never starts the execution runner (`execution.status=not_requested`).
+3. Approve the plan explicitly: `POST /tasks/{id}/approve-plan` with
+   `{"approved": true}` (or `false` to reject).
+   - Under the current orchestrator, `approved: true` synchronously runs
+     implementation and the static quality gate in that request.
+   - Static gate success may leave the task at `lifecycle=completed` with
+     legacy `status=passed` for profiles that do **not** require runtime
+     (e.g. `generic_text`). That means static checks passed — **not** that
+     generated code was executed or is runtime-correct.
+   - For `validation_profile=python_test_execution`, approval leaves the task
+     at `lifecycle=awaiting_execution_auth` with `execution.status=not_requested`.
+4. Execution runner (separate gate, default **off**): only after approval, and
+   only when the runner is explicitly enabled, call
+   `POST /tasks/{id}/execute-tests` with `{"confirm": true}`.
+
+Profile alone / create-task / model text / bearer presence never authorize
+isolated execution. `EXECUTION_RUNNER=off` remains the default.
 
 ## Disable (default)
 
