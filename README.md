@@ -174,6 +174,17 @@ Persistensi ini **bukan** jaminan exactly-once execution, keamanan multi-process
 
 **Rotasi token:** ganti `RAJOSA_API_TOKEN` di `.env` API dan `.env.local` web, restart `dev-api` + `dev-web`, buang nilai lama.
 
+**Backup SQLite:** DB memakai WAL. Jangan hanya menyalin file `.sqlite3` hidup. Hentikan API bila bisa, lalu dari `apps/api`:
+
+```bash
+.venv/bin/python -m app.persistence.backup_cli backup \
+  --source var/rajosa.sqlite3 --dest-dir var/backups
+.venv/bin/python -m app.persistence.backup_cli verify \
+  --path var/backups/<file>.sqlite3 --checksum var/backups/<file>.sqlite3.sha256
+```
+
+Prosedur lengkap: [docs/sqlite-backup.md](docs/sqlite-backup.md).
+
 Workspace memberikan path containment. Runner kontainer (jika diaktifkan) menambah containment terpisah untuk tes Python yang diotorisasi secara eksplisit — tetap bukan sandbox produksi. `EXECUTION_RUNNER` default `off`.
 
 `status` task yang `passed` dari quality gate **tidak** berarti `execution.tests_passed`. Bukti runtime ada di field `execution`.
